@@ -832,6 +832,8 @@ SET(LAUNCHER_SOURCES
     # GUI - windows
     ui/BPOptionsMenu.h
     ui/BPOptionsMenu.cpp
+    ui/BPSettingsOverlay.h
+    ui/BPSettingsOverlay.cpp
     ui/GuiUtil.h
     ui/GuiUtil.cpp
     ui/MainWindow.h

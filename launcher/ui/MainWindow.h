@@ -49,6 +49,7 @@
 #include "BaseInstance.h"
 #include "GamepadController.h"
 #include "ui/BPOptionsMenu.h"
+#include "ui/BPSettingsOverlay.h"
 #include "minecraft/auth/MinecraftAccount.h"
 #include "net/NetJob.h"
 #include "ui/instanceview/InstanceDelegate.h"
@@ -237,6 +238,7 @@ class MainWindow : public QMainWindow {
     void bpNextGroup();
     void bpShowOptionsMenu();
     void onBPOptionsAction(BPOptionsMenu::Action action);
+    void onGamepadStart();
 
    private:
     void retranslateUi();
@@ -274,8 +276,8 @@ class MainWindow : public QMainWindow {
 
     // Big Picture state
     QLabel* m_bpHudLabel = nullptr;
-    BPOptionsMenu* m_bpOptionsPanel = nullptr;  // persistent overlay widget, shown/hidden
-    InstanceWindow* m_bpInstanceWindow = nullptr;
+    BPOptionsMenu* m_bpOptionsPanel = nullptr;      // instance action menu overlay
+    BPSettingsOverlay* m_bpSettingsOverlay = nullptr;  // inline settings panel
 
     std::shared_ptr<Setting> instanceToolbarSetting = nullptr;
 

@@ -65,6 +65,12 @@ class InstanceWindow : public QMainWindow, public BasePageContainer {
     // Move to the next (+1) or previous (-1) page in the sidebar list
     void navigatePage(int delta);
 
+    // Apply console-style Big Picture styling (call once after showMaximized in BP mode)
+    void applyBigPictureMode();
+
+    // Focus the primary interactive widget in the currently shown settings page
+    void focusPageContent();
+
     // save all settings and changes (prepare for launch)
     bool saveAll();
 
@@ -90,6 +96,8 @@ class InstanceWindow : public QMainWindow, public BasePageContainer {
     BaseInstance* m_instance;
     bool m_doNotSave = false;
     PageContainer* m_container = nullptr;
+    QWidget* m_buttonBar = nullptr;
+    QPushButton* m_helpButton = nullptr;
     QPushButton* m_closeButton = nullptr;
     QToolButton* m_launchButton = nullptr;
     QPushButton* m_killButton = nullptr;

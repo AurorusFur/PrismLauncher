@@ -39,8 +39,8 @@
 
 #include <QCloseEvent>
 #include <QHBoxLayout>
-#include <QListView>
 #include <QMessageBox>
+#include <QStatusBar>
 #include <QPushButton>
 #include <QScrollBar>
 
@@ -74,19 +74,20 @@ InstanceWindow::InstanceWindow(BaseInstance* instance, QWidget* parent) : QMainW
 
     // Add custom buttons to the page container layout.
     {
-        auto horizontalLayout = new QHBoxLayout(this);
+        m_buttonBar = new QWidget(this);
+        auto* horizontalLayout = new QHBoxLayout(m_buttonBar);
         horizontalLayout->setObjectName(QStringLiteral("horizontalLayout"));
         horizontalLayout->setContentsMargins(0, 0, 6, 6);
 
-        auto btnHelp = new QPushButton(this);
-        btnHelp->setText(tr("Help"));
-        horizontalLayout->addWidget(btnHelp);
-        connect(btnHelp, &QPushButton::clicked, m_container, &PageContainer::help);
+        m_helpButton = new QPushButton(m_buttonBar);
+        m_helpButton->setText(tr("Help"));
+        horizontalLayout->addWidget(m_helpButton);
+        connect(m_helpButton, &QPushButton::clicked, m_container, &PageContainer::help);
 
-        auto spacer = new QSpacerItem(40, 20, QSizePolicy::Expanding, QSizePolicy::Minimum);
+        auto* spacer = new QSpacerItem(40, 20, QSizePolicy::Expanding, QSizePolicy::Minimum);
         horizontalLayout->addSpacerItem(spacer);
 
-        m_launchButton = new QToolButton(this);
+        m_launchButton = new QToolButton(m_buttonBar);
         m_launchButton->setText(tr("&Launch"));
         m_launchButton->setToolTip(tr("Launch the instance"));
         m_launchButton->setPopupMode(QToolButton::MenuButtonPopup);
@@ -94,7 +95,7 @@ InstanceWindow::InstanceWindow(BaseInstance* instance, QWidget* parent) : QMainW
         horizontalLayout->addWidget(m_launchButton);
         connect(m_launchButton, &QPushButton::clicked, this, [this] { APPLICATION->launch(m_instance); });
 
-        m_killButton = new QPushButton(this);
+        m_killButton = new QPushButton(m_buttonBar);
         m_killButton->setText(tr("&Kill"));
         m_killButton->setToolTip(tr("Kill the running instance"));
         m_killButton->setShortcut(QKeySequence(tr("Ctrl+K")));
@@ -103,12 +104,12 @@ InstanceWindow::InstanceWindow(BaseInstance* instance, QWidget* parent) : QMainW
 
         updateButtons();
 
-        m_closeButton = new QPushButton(this);
+        m_closeButton = new QPushButton(m_buttonBar);
         m_closeButton->setText(tr("Close"));
         horizontalLayout->addWidget(m_closeButton);
         connect(m_closeButton, &QPushButton::clicked, this, &QMainWindow::close);
 
-        m_container->addButtons(horizontalLayout);
+        m_container->addButtons(m_buttonBar);
 
         connect(m_instance, &BaseInstance::profilerChanged, this, &InstanceWindow::updateButtons);
         connect(APPLICATION, &Application::globalSettingsApplied, this, &InstanceWindow::updateButtons);
@@ -218,15 +219,52 @@ void InstanceWindow::refreshContainer()
 
 void InstanceWindow::navigatePage(int delta)
 {
-    // Find the sidebar QListView inside PageContainer and shift its selection
-    auto* list = m_container->findChild<QListView*>();
-    if (!list) return;
-    auto* model = list->model();
-    if (!model) return;
-    int row = list->currentIndex().isValid() ? list->currentIndex().row() : 0;
-    int next = qBound(0, row + delta, model->rowCount() - 1);
-    list->setCurrentIndex(model->index(next, 0));
-    list->setFocus();
+    m_container->navigatePage(delta);
+}
+
+void InstanceWindow::focusPageContent()
+{
+    m_container->focusFirstInContent();
+}
+
+void InstanceWindow::applyBigPictureMode()
+{
+    // Hide mouse-only chrome — B closes the window, so Close is redundant
+    if (m_helpButton)
+        m_helpButton->hide();
+    if (m_closeButton)
+        m_closeButton->hide();
+
+    // Style the button bar to match the dark theme
+    if (m_buttonBar) {
+        m_buttonBar->setStyleSheet(
+            "QWidget { background: #060c14; border-top: 1px solid #1a2a3a; }"
+            "QToolButton, QPushButton {"
+            "  background: #0d2035; color: #90b8d8;"
+            "  border: 1px solid #1e3858; border-radius: 4px;"
+            "  padding: 4px 14px; font-size: 13px;"
+            "}"
+            "QToolButton:hover, QPushButton:hover { background: #1a3a5a; color: #ffffff; }"
+            "QToolButton:disabled, QPushButton:disabled { color: #3a5060; border-color: #111d2a; }");
+    }
+
+    // Style the sidebar and header for controller navigation
+    m_container->setBigPictureMode(true);
+
+    // Dark background for the whole window
+    setStyleSheet("QMainWindow { background: #060c14; }");
+
+    // HUD at the bottom with button hints
+    statusBar()->setStyleSheet(
+        "QStatusBar {"
+        "  background: #040810;"
+        "  border-top: 1px solid #1a2a3a;"
+        "  color: #7090a8;"
+        "  font-size: 13px;"
+        "}");
+    statusBar()->showMessage(tr("[LB / RB]  Switch Page    [↑↓]  Navigate    [A]  Select / Confirm    [Y]  Next Button    [B]  Close"));
+    statusBar()->setSizeGripEnabled(false);
+    statusBar()->show();
 }
 
 BasePage* InstanceWindow::selectedPage() const

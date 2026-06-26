@@ -666,20 +666,29 @@ void MainWindow::applyBigPictureMode()
         connect(m_gamepad, &GamepadController::infoPressed,          this, &MainWindow::onGamepadInfo);
         connect(m_gamepad, &GamepadController::shoulderLeftPressed,  this, &MainWindow::bpPrevGroup);
         connect(m_gamepad, &GamepadController::shoulderRightPressed, this, &MainWindow::bpNextGroup);
+        connect(m_gamepad, &GamepadController::startPressed,         this, &MainWindow::onGamepadStart);
 
     } else if (!bigPicture && m_gamepad) {
         delete m_gamepad;
         m_gamepad = nullptr;
     }
 
-    // Options overlay panel: create once, reuse on each X press
+    // Options overlay panel (X button action menu): create once, reuse
     if (bigPicture && !m_bpOptionsPanel) {
         m_bpOptionsPanel = new BPOptionsMenu(this);
         connect(m_bpOptionsPanel, &BPOptionsMenu::actionSelected, this, &MainWindow::onBPOptionsAction);
-        // dismissed() requires no action — the panel already hid itself
     } else if (!bigPicture && m_bpOptionsPanel) {
         delete m_bpOptionsPanel;
         m_bpOptionsPanel = nullptr;
+    }
+
+    // Inline settings overlay (Y button): create once, reuse
+    if (bigPicture && !m_bpSettingsOverlay) {
+        m_bpSettingsOverlay = new BPSettingsOverlay(this);
+    } else if (!bigPicture && m_bpSettingsOverlay) {
+        m_bpSettingsOverlay->closeOverlay();
+        delete m_bpSettingsOverlay;
+        m_bpSettingsOverlay = nullptr;
     }
 }
 
@@ -719,8 +728,8 @@ void MainWindow::bpJumpToGroup(const QString& groupName)
 void MainWindow::bpPrevGroup()
 {
     if (m_bpOptionsPanel && m_bpOptionsPanel->isVisible()) return;
-    if (m_bpInstanceWindow && m_bpInstanceWindow->isVisible()) {
-        m_bpInstanceWindow->navigatePage(-1);
+    if (m_bpSettingsOverlay && m_bpSettingsOverlay->isVisible()) {
+        m_bpSettingsOverlay->tabLeft();
         return;
     }
     QStringList groups = bpGroupList();
@@ -734,8 +743,8 @@ void MainWindow::bpPrevGroup()
 void MainWindow::bpNextGroup()
 {
     if (m_bpOptionsPanel && m_bpOptionsPanel->isVisible()) return;
-    if (m_bpInstanceWindow && m_bpInstanceWindow->isVisible()) {
-        m_bpInstanceWindow->navigatePage(+1);
+    if (m_bpSettingsOverlay && m_bpSettingsOverlay->isVisible()) {
+        m_bpSettingsOverlay->tabRight();
         return;
     }
     QStringList groups = bpGroupList();
@@ -750,6 +759,12 @@ void MainWindow::bpShowOptionsMenu()
 {
     if (!m_bpOptionsPanel || !m_selectedInstance) return;
     if (m_bpOptionsPanel->isVisible()) return;
+    if (m_bpSettingsOverlay && m_bpSettingsOverlay->isVisible()) {
+        // In settings: X = Remove/Delete selected item
+        if (m_bpSettingsOverlay->mode() == BPSettingsOverlay::Mode::Content)
+            m_bpSettingsOverlay->triggerSecondaryAction();
+        return;
+    }
 
     m_bpOptionsPanel->setInstanceName(m_selectedInstance->name());
     m_bpOptionsPanel->setGeometry(0, 0, width(), height());
@@ -772,10 +787,27 @@ void MainWindow::onBPOptionsAction(BPOptionsMenu::Action action)
 
 // ── Gamepad routing slots ───────────────────────────────────────────────────
 
+// Send a key event to whichever widget currently has focus inside `win`.
+// Falls back to the window itself if no child has focus.
+static void sendKeyToWindow(QWidget* win, Qt::Key key, Qt::KeyboardModifiers mods = Qt::NoModifier)
+{
+    QWidget* fw = QApplication::focusWidget();
+    if (!fw || !win->isAncestorOf(fw))
+        fw = win;
+    QCoreApplication::postEvent(fw, new QKeyEvent(QEvent::KeyPress,   key, mods));
+    QCoreApplication::postEvent(fw, new QKeyEvent(QEvent::KeyRelease, key, mods));
+}
+
 void MainWindow::onGamepadNavLeft()
 {
     if (m_bpOptionsPanel && m_bpOptionsPanel->isVisible()) return;
-    if (m_bpInstanceWindow && m_bpInstanceWindow->isVisible()) return;
+    if (m_bpSettingsOverlay && m_bpSettingsOverlay->isVisible()) {
+        // Sidebar mode: ← does nothing (sidebar is the leftmost element)
+        // Content mode: send Left to focused widget
+        if (m_bpSettingsOverlay->mode() == BPSettingsOverlay::Mode::Content)
+            sendKeyToWindow(m_bpSettingsOverlay, Qt::Key_Left);
+        return;
+    }
     QCoreApplication::postEvent(view, new QKeyEvent(QEvent::KeyPress,   Qt::Key_Left, Qt::NoModifier));
     QCoreApplication::postEvent(view, new QKeyEvent(QEvent::KeyRelease, Qt::Key_Left, Qt::NoModifier));
 }
@@ -783,7 +815,15 @@ void MainWindow::onGamepadNavLeft()
 void MainWindow::onGamepadNavRight()
 {
     if (m_bpOptionsPanel && m_bpOptionsPanel->isVisible()) return;
-    if (m_bpInstanceWindow && m_bpInstanceWindow->isVisible()) return;
+    if (m_bpSettingsOverlay && m_bpSettingsOverlay->isVisible()) {
+        // Sidebar mode: → enters content area
+        // Content mode: send Right to focused widget
+        if (m_bpSettingsOverlay->mode() == BPSettingsOverlay::Mode::TabBar)
+            m_bpSettingsOverlay->enterContent();
+        else
+            sendKeyToWindow(m_bpSettingsOverlay, Qt::Key_Right);
+        return;
+    }
     QCoreApplication::postEvent(view, new QKeyEvent(QEvent::KeyPress,   Qt::Key_Right, Qt::NoModifier));
     QCoreApplication::postEvent(view, new QKeyEvent(QEvent::KeyRelease, Qt::Key_Right, Qt::NoModifier));
 }
@@ -794,9 +834,11 @@ void MainWindow::onGamepadNavUp()
         m_bpOptionsPanel->navigatePrev();
         return;
     }
-    if (m_bpInstanceWindow && m_bpInstanceWindow->isVisible()) {
-        QCoreApplication::postEvent(m_bpInstanceWindow, new QKeyEvent(QEvent::KeyPress,   Qt::Key_Up, Qt::NoModifier));
-        QCoreApplication::postEvent(m_bpInstanceWindow, new QKeyEvent(QEvent::KeyRelease, Qt::Key_Up, Qt::NoModifier));
+    if (m_bpSettingsOverlay && m_bpSettingsOverlay->isVisible()) {
+        // Both modes: send Up to focused widget
+        // Sidebar: QListWidget navigates to previous item
+        // Content: content widget handles Up
+        sendKeyToWindow(m_bpSettingsOverlay, Qt::Key_Up);
         return;
     }
     QCoreApplication::postEvent(view, new QKeyEvent(QEvent::KeyPress,   Qt::Key_Up, Qt::NoModifier));
@@ -809,9 +851,11 @@ void MainWindow::onGamepadNavDown()
         m_bpOptionsPanel->navigateNext();
         return;
     }
-    if (m_bpInstanceWindow && m_bpInstanceWindow->isVisible()) {
-        QCoreApplication::postEvent(m_bpInstanceWindow, new QKeyEvent(QEvent::KeyPress,   Qt::Key_Down, Qt::NoModifier));
-        QCoreApplication::postEvent(m_bpInstanceWindow, new QKeyEvent(QEvent::KeyRelease, Qt::Key_Down, Qt::NoModifier));
+    if (m_bpSettingsOverlay && m_bpSettingsOverlay->isVisible()) {
+        // Both modes: send Down to focused widget
+        // Sidebar: QListWidget navigates to next item
+        // Content: content widget handles Down
+        sendKeyToWindow(m_bpSettingsOverlay, Qt::Key_Down);
         return;
     }
     QCoreApplication::postEvent(view, new QKeyEvent(QEvent::KeyPress,   Qt::Key_Down, Qt::NoModifier));
@@ -824,9 +868,11 @@ void MainWindow::onGamepadConfirm()
         m_bpOptionsPanel->confirmCurrent();
         return;
     }
-    if (m_bpInstanceWindow && m_bpInstanceWindow->isVisible()) {
-        QCoreApplication::postEvent(m_bpInstanceWindow, new QKeyEvent(QEvent::KeyPress,   Qt::Key_Return, Qt::NoModifier));
-        QCoreApplication::postEvent(m_bpInstanceWindow, new QKeyEvent(QEvent::KeyRelease, Qt::Key_Return, Qt::NoModifier));
+    if (m_bpSettingsOverlay && m_bpSettingsOverlay->isVisible()) {
+        if (m_bpSettingsOverlay->mode() == BPSettingsOverlay::Mode::TabBar)
+            m_bpSettingsOverlay->enterContent();
+        else
+            m_bpSettingsOverlay->doConfirm();
         return;
     }
     on_actionLaunchInstance_triggered();
@@ -838,8 +884,11 @@ void MainWindow::onGamepadCancel()
         m_bpOptionsPanel->dismiss();
         return;
     }
-    if (m_bpInstanceWindow && m_bpInstanceWindow->isVisible()) {
-        m_bpInstanceWindow->close();
+    if (m_bpSettingsOverlay && m_bpSettingsOverlay->isVisible()) {
+        if (m_bpSettingsOverlay->mode() == BPSettingsOverlay::Mode::Content)
+            m_bpSettingsOverlay->exitToTabBar();
+        else
+            m_bpSettingsOverlay->closeOverlay();
         return;
     }
     // On the main screen B does nothing
@@ -848,7 +897,24 @@ void MainWindow::onGamepadCancel()
 void MainWindow::onGamepadInfo()
 {
     if (m_bpOptionsPanel && m_bpOptionsPanel->isVisible()) return;
+    if (m_bpSettingsOverlay && m_bpSettingsOverlay->isVisible()) {
+        if (m_bpSettingsOverlay->mode() == BPSettingsOverlay::Mode::Content)
+            m_bpSettingsOverlay->triggerPrimaryAction();  // Y = Add/Install
+        else
+            m_bpSettingsOverlay->enterContent();           // Y from tab bar = enter content
+        return;
+    }
     on_actionEditInstance_triggered();
+}
+
+void MainWindow::onGamepadStart()
+{
+    if (m_bpOptionsPanel && m_bpOptionsPanel->isVisible()) return;
+    if (m_bpSettingsOverlay && m_bpSettingsOverlay->isVisible()) {
+        if (m_bpSettingsOverlay->mode() == BPSettingsOverlay::Mode::Content)
+            m_bpSettingsOverlay->triggerToggleAction();  // Start = Toggle/Join
+        return;
+    }
 }
 
 void MainWindow::updateLaunchButton()
@@ -1641,22 +1707,20 @@ void MainWindow::on_actionEditInstance_triggered()
     if (!m_selectedInstance)
         return;
 
-    if (m_selectedInstance->canEdit()) {
-        auto* win = APPLICATION->showInstanceWindow(m_selectedInstance);
-        if (win && APPLICATION->settings()->get("BigPictureMode").toBool()) {
-            win->showMaximized();
-            win->raise();
-            win->activateWindow();
-            // Navigate to settings page (first non-console page) by default
-            win->selectPage("settings");
-            m_bpInstanceWindow = win;
-            connect(win, &InstanceWindow::isClosing, this, [this] { m_bpInstanceWindow = nullptr; });
-        }
-    } else {
+    if (!m_selectedInstance->canEdit()) {
         CustomMessageBox::selectable(this, tr("Instance not editable"),
                                      tr("This instance is not editable. It may be broken, invalid, or too old. Check logs for details."),
                                      QMessageBox::Critical)
             ->show();
+        return;
+    }
+
+    if (APPLICATION->settings()->get("BigPictureMode").toBool()) {
+        // In BP mode: show inline settings overlay instead of a separate window
+        if (m_bpSettingsOverlay && !m_bpSettingsOverlay->isVisible())
+            m_bpSettingsOverlay->open(m_selectedInstance);
+    } else {
+        APPLICATION->showInstanceWindow(m_selectedInstance);
     }
 }
 

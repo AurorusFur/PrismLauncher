@@ -39,6 +39,7 @@
 #include "BuildConfig.h"
 #include "PageContainer_p.h"
 
+#include <QAbstractItemView>
 #include <QDialogButtonBox>
 #include <QGridLayout>
 #include <QLabel>
@@ -281,6 +282,69 @@ bool PageContainer::saveAll()
         }
     }
     return true;
+}
+
+void PageContainer::setBigPictureMode(bool bp)
+{
+    auto* delegate = static_cast<PageViewDelegate*>(m_pageList->itemDelegate());
+    if (bp) {
+        delegate->setMinHeight(52);
+        m_pageList->setStyleSheet(
+            "QListView {"
+            "  background: #060c14;"
+            "  border: none;"
+            "  border-right: 1px solid #1a2a3a;"
+            "  color: #90b0d0;"
+            "  font-size: 14px;"
+            "  outline: none;"
+            "}"
+            "QListView::item {"
+            "  padding: 6px 10px;"
+            "  border-bottom: 1px solid #111d2a;"
+            "}"
+            "QListView::item:selected {"
+            "  background: #1a3a5a;"
+            "  color: #ffffff;"
+            "  border-left: 3px solid #5aadff;"
+            "}");
+        m_header->setStyleSheet("QLabel { color: #cce0ff; font-size: 15px; background: transparent; }");
+    } else {
+        delegate->setMinHeight(32);
+        m_pageList->setStyleSheet(QString());
+        m_header->setStyleSheet(QString());
+    }
+    m_pageList->reset();
+}
+
+void PageContainer::navigatePage(int delta)
+{
+    auto* model = m_pageList->model();
+    if (!model) return;
+    QModelIndex cur = m_pageList->currentIndex();
+    int row = cur.isValid() ? cur.row() : 0;
+    int next = qBound(0, row + delta, model->rowCount() - 1);
+    m_pageList->setCurrentIndex(model->index(next, 0));
+    // Move focus into the page content so the controller can interact with it immediately
+    focusFirstInContent();
+}
+
+void PageContainer::focusFirstInContent()
+{
+    QWidget* page = qobject_cast<QWidget*>(m_pageStack->currentWidget());
+    if (!page) return;
+    // Prefer QAbstractItemView (list/tree/table) — the primary control on most pages
+    auto* view = page->findChild<QAbstractItemView*>();
+    if (view && view->isVisibleTo(page) && view->isEnabled()) {
+        view->setFocus(Qt::OtherFocusReason);
+        return;
+    }
+    // Fall back to first widget that accepts keyboard focus
+    for (auto* w : page->findChildren<QWidget*>()) {
+        if (w->isVisibleTo(page) && w->isEnabled() && (w->focusPolicy() & Qt::TabFocus)) {
+            w->setFocus(Qt::OtherFocusReason);
+            return;
+        }
+    }
 }
 
 void PageContainer::changeEvent(QEvent* event)

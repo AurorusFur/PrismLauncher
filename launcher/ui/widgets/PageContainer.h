@@ -91,6 +91,9 @@ class PageContainer : public QWidget, public BasePageContainer {
     void changeEvent(QEvent*) override;
 
     void hidePageList() { m_pageList->hide(); }
+    void setBigPictureMode(bool bp);
+    void navigatePage(int delta);
+    void focusFirstInContent();
 
    private:
     void createUI();

@@ -26,12 +26,15 @@ const int pageIconSize = 24;
 class PageViewDelegate : public QStyledItemDelegate {
    public:
     PageViewDelegate(QObject* parent) : QStyledItemDelegate(parent) {}
-    QSize sizeHint(const QStyleOptionViewItem& option, const QModelIndex& index) const
+    void setMinHeight(int h) { m_minHeight = h; }
+    QSize sizeHint(const QStyleOptionViewItem& option, const QModelIndex& index) const override
     {
         QSize size = QStyledItemDelegate::sizeHint(option, index);
-        size.setHeight(qMax(size.height(), 32));
+        size.setHeight(qMax(size.height(), m_minHeight));
         return size;
     }
+   private:
+    int m_minHeight = 32;
 };
 
 class PageModel : public QAbstractListModel {
