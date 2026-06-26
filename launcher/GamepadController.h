@@ -27,10 +27,13 @@ signals:
     void navigateRight();
     void navigateUp();
     void navigateDown();
-    void confirmPressed();   // A — launch
-    void cancelPressed();    // B — back
-    void optionsPressed();   // X — context menu
-    void infoPressed();      // Y — instance settings
+    void confirmPressed();        // A — launch / confirm
+    void cancelPressed();         // B — back / close
+    void optionsPressed();        // X — options menu
+    void infoPressed();           // Y — instance settings
+    void shoulderLeftPressed();   // LB — previous group
+    void shoulderRightPressed();  // RB — next group
+    void startPressed();          // Start — system menu
 
 private slots:
     void poll();

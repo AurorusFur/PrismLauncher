@@ -124,10 +124,13 @@ void GamepadController::poll()
                 break;
             case SDL_CONTROLLERBUTTONDOWN:
                 switch (event.cbutton.button) {
-                    case SDL_CONTROLLER_BUTTON_A: emit confirmPressed(); break;
-                    case SDL_CONTROLLER_BUTTON_B: emit cancelPressed();  break;
-                    case SDL_CONTROLLER_BUTTON_X: emit optionsPressed(); break;
-                    case SDL_CONTROLLER_BUTTON_Y: emit infoPressed();    break;
+                    case SDL_CONTROLLER_BUTTON_A:            emit confirmPressed();       break;
+                    case SDL_CONTROLLER_BUTTON_B:            emit cancelPressed();        break;
+                    case SDL_CONTROLLER_BUTTON_X:            qDebug() << "GamepadController: X pressed -> optionsPressed"; emit optionsPressed();       break;
+                    case SDL_CONTROLLER_BUTTON_Y:            emit infoPressed();          break;
+                    case SDL_CONTROLLER_BUTTON_LEFTSHOULDER: emit shoulderLeftPressed();  break;
+                    case SDL_CONTROLLER_BUTTON_RIGHTSHOULDER:emit shoulderRightPressed(); break;
+                    case SDL_CONTROLLER_BUTTON_START:        emit startPressed();         break;
                     default: break;
                 }
                 break;

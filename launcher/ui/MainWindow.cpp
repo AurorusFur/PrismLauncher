@@ -92,6 +92,7 @@
 #include <updater/ExternalUpdater.h>
 #include "InstanceWindow.h"
 
+#include "ui/BPOptionsMenu.h"
 #include "ui/GuiUtil.h"
 #include "ui/ViewLogWindow.h"
 #include "ui/dialogs/AboutDialog.h"
@@ -605,16 +606,47 @@ void MainWindow::applyBigPictureMode()
 
     if (bigPicture) {
         showMaximized();
-        ui->mainToolBar->setIconSize(QSize(48, 48));
-        ui->instanceToolBar->setIconSize(QSize(48, 48));
+        // Hide all chrome — only the instance grid should show
+        ui->mainToolBar->hide();
+        ui->instanceToolBar->hide();
+        ui->newsToolBar->hide();
+        ui->menuBar->hide();
+        ui->statusBar->setStyleSheet(
+            "QStatusBar {"
+            "  background: #060c14;"
+            "  border-top: 1px solid #1a2a3a;"
+            "  color: #7090a8;"
+            "}");
+        ui->statusBar->show();
+        // Replace status bar content with controller hint bar
+        m_statusLeft->hide();
+        m_statusCenter->hide();
+        if (!m_bpHudLabel) {
+            m_bpHudLabel = new QLabel(this);
+            m_bpHudLabel->setAlignment(Qt::AlignCenter);
+            m_bpHudLabel->setStyleSheet("QLabel { color: #7090a8; font-size: 13px; background: transparent; }");
+            ui->statusBar->addWidget(m_bpHudLabel, 1);
+        }
+        updateBPHud();
     } else {
-        ui->mainToolBar->setIconSize(QSize());
-        ui->instanceToolBar->setIconSize(QSize());
+        // Restore toolbar visibility
+        ui->mainToolBar->show();
+        ui->instanceToolBar->show();
+        ui->newsToolBar->show();
+        updateMainToolBar();   // restores menuBar vs toolbar setting
+        ui->statusBar->setStyleSheet(QString());
+        // Restore status bar labels
+        if (m_bpHudLabel) {
+            ui->statusBar->removeWidget(m_bpHudLabel);
+            delete m_bpHudLabel;
+            m_bpHudLabel = nullptr;
+        }
+        m_statusLeft->show();
+        m_statusCenter->show();
     }
 
-    if (m_listDelegate) {
+    if (m_listDelegate)
         m_listDelegate->setBigPictureMode(bigPicture);
-    }
     view->setSpacing(bigPicture ? 12 : 5);
     view->setItemWidth(bigPicture ? ListViewDelegate::BP_ITEM_WIDTH : 100);
     view->viewport()->update();
@@ -622,24 +654,201 @@ void MainWindow::applyBigPictureMode()
     // Gamepad: create when entering Big Picture, destroy when leaving
     if (bigPicture && !m_gamepad) {
         m_gamepad = new GamepadController(this);
-        auto sendKey = [this](Qt::Key key) {
-            QKeyEvent* press = new QKeyEvent(QEvent::KeyPress, key, Qt::NoModifier);
-            QKeyEvent* release = new QKeyEvent(QEvent::KeyRelease, key, Qt::NoModifier);
-            QCoreApplication::postEvent(view, press);
-            QCoreApplication::postEvent(view, release);
-        };
-        connect(m_gamepad, &GamepadController::navigateLeft,  this, [sendKey]{ sendKey(Qt::Key_Left); });
-        connect(m_gamepad, &GamepadController::navigateRight, this, [sendKey]{ sendKey(Qt::Key_Right); });
-        connect(m_gamepad, &GamepadController::navigateUp,    this, [sendKey]{ sendKey(Qt::Key_Up); });
-        connect(m_gamepad, &GamepadController::navigateDown,  this, [sendKey]{ sendKey(Qt::Key_Down); });
-        connect(m_gamepad, &GamepadController::confirmPressed, this, &MainWindow::on_actionLaunchInstance_triggered);
-        connect(m_gamepad, &GamepadController::cancelPressed,  this, [sendKey]{ sendKey(Qt::Key_Escape); });
-        connect(m_gamepad, &GamepadController::optionsPressed, this, [sendKey]{ sendKey(Qt::Key_Menu); });
-        connect(m_gamepad, &GamepadController::infoPressed,    this, &MainWindow::on_actionEditInstance_triggered);
+
+        // All navigation goes through routing slots that respect overlay state
+        connect(m_gamepad, &GamepadController::navigateLeft,         this, &MainWindow::onGamepadNavLeft);
+        connect(m_gamepad, &GamepadController::navigateRight,        this, &MainWindow::onGamepadNavRight);
+        connect(m_gamepad, &GamepadController::navigateUp,           this, &MainWindow::onGamepadNavUp);
+        connect(m_gamepad, &GamepadController::navigateDown,         this, &MainWindow::onGamepadNavDown);
+        connect(m_gamepad, &GamepadController::confirmPressed,       this, &MainWindow::onGamepadConfirm);
+        connect(m_gamepad, &GamepadController::cancelPressed,        this, &MainWindow::onGamepadCancel);
+        connect(m_gamepad, &GamepadController::optionsPressed,       this, &MainWindow::bpShowOptionsMenu);
+        connect(m_gamepad, &GamepadController::infoPressed,          this, &MainWindow::onGamepadInfo);
+        connect(m_gamepad, &GamepadController::shoulderLeftPressed,  this, &MainWindow::bpPrevGroup);
+        connect(m_gamepad, &GamepadController::shoulderRightPressed, this, &MainWindow::bpNextGroup);
+
     } else if (!bigPicture && m_gamepad) {
         delete m_gamepad;
         m_gamepad = nullptr;
     }
+
+    // Options overlay panel: create once, reuse on each X press
+    if (bigPicture && !m_bpOptionsPanel) {
+        m_bpOptionsPanel = new BPOptionsMenu(this);
+        connect(m_bpOptionsPanel, &BPOptionsMenu::actionSelected, this, &MainWindow::onBPOptionsAction);
+        // dismissed() requires no action — the panel already hid itself
+    } else if (!bigPicture && m_bpOptionsPanel) {
+        delete m_bpOptionsPanel;
+        m_bpOptionsPanel = nullptr;
+    }
+}
+
+void MainWindow::updateBPHud()
+{
+    if (!m_bpHudLabel) return;
+    m_bpHudLabel->setText(
+        tr("[A] Launch    [X] Options    [Y] Settings    [B] Back    [LB / RB] Switch Group"));
+}
+
+QStringList MainWindow::bpGroupList() const
+{
+    // Build ordered group list in the order the proxy model presents them
+    QStringList groups;
+    const int n = proxymodel->rowCount();
+    for (int i = 0; i < n; ++i) {
+        QString g = proxymodel->index(i, 0).data(InstanceViewRoles::GroupRole).toString();
+        if (!groups.contains(g))
+            groups << g;
+    }
+    return groups;
+}
+
+void MainWindow::bpJumpToGroup(const QString& groupName)
+{
+    const int n = proxymodel->rowCount();
+    for (int i = 0; i < n; ++i) {
+        QModelIndex idx = proxymodel->index(i, 0);
+        if (idx.data(InstanceViewRoles::GroupRole).toString() == groupName) {
+            view->setCurrentIndex(idx);
+            view->scrollTo(idx);
+            return;
+        }
+    }
+}
+
+void MainWindow::bpPrevGroup()
+{
+    if (m_bpOptionsPanel && m_bpOptionsPanel->isVisible()) return;
+    if (m_bpInstanceWindow && m_bpInstanceWindow->isVisible()) {
+        m_bpInstanceWindow->navigatePage(-1);
+        return;
+    }
+    QStringList groups = bpGroupList();
+    if (groups.isEmpty()) return;
+    QModelIndex cur = view->currentIndex();
+    QString curGroup = cur.isValid() ? cur.data(InstanceViewRoles::GroupRole).toString() : QString();
+    int idx = groups.indexOf(curGroup);
+    bpJumpToGroup(groups[(idx - 1 + groups.size()) % groups.size()]);
+}
+
+void MainWindow::bpNextGroup()
+{
+    if (m_bpOptionsPanel && m_bpOptionsPanel->isVisible()) return;
+    if (m_bpInstanceWindow && m_bpInstanceWindow->isVisible()) {
+        m_bpInstanceWindow->navigatePage(+1);
+        return;
+    }
+    QStringList groups = bpGroupList();
+    if (groups.isEmpty()) return;
+    QModelIndex cur = view->currentIndex();
+    QString curGroup = cur.isValid() ? cur.data(InstanceViewRoles::GroupRole).toString() : QString();
+    int idx = groups.indexOf(curGroup);
+    bpJumpToGroup(groups[(idx + 1) % groups.size()]);
+}
+
+void MainWindow::bpShowOptionsMenu()
+{
+    if (!m_bpOptionsPanel || !m_selectedInstance) return;
+    if (m_bpOptionsPanel->isVisible()) return;
+
+    m_bpOptionsPanel->setInstanceName(m_selectedInstance->name());
+    m_bpOptionsPanel->setGeometry(0, 0, width(), height());
+    m_bpOptionsPanel->show();
+    m_bpOptionsPanel->raise();
+}
+
+void MainWindow::onBPOptionsAction(BPOptionsMenu::Action action)
+{
+    switch (action) {
+        case BPOptionsMenu::Launch:     on_actionLaunchInstance_triggered(); break;
+        case BPOptionsMenu::Settings:   on_actionEditInstance_triggered();   break;
+        case BPOptionsMenu::Rename:     on_actionRenameInstance_triggered(); break;
+        case BPOptionsMenu::Copy:       on_actionCopyInstance_triggered();   break;
+        case BPOptionsMenu::Delete:     on_actionDeleteInstance_triggered(); break;
+        case BPOptionsMenu::ChangeIcon: on_actionChangeInstIcon_triggered(); break;
+        default: break;
+    }
+}
+
+// ── Gamepad routing slots ───────────────────────────────────────────────────
+
+void MainWindow::onGamepadNavLeft()
+{
+    if (m_bpOptionsPanel && m_bpOptionsPanel->isVisible()) return;
+    if (m_bpInstanceWindow && m_bpInstanceWindow->isVisible()) return;
+    QCoreApplication::postEvent(view, new QKeyEvent(QEvent::KeyPress,   Qt::Key_Left, Qt::NoModifier));
+    QCoreApplication::postEvent(view, new QKeyEvent(QEvent::KeyRelease, Qt::Key_Left, Qt::NoModifier));
+}
+
+void MainWindow::onGamepadNavRight()
+{
+    if (m_bpOptionsPanel && m_bpOptionsPanel->isVisible()) return;
+    if (m_bpInstanceWindow && m_bpInstanceWindow->isVisible()) return;
+    QCoreApplication::postEvent(view, new QKeyEvent(QEvent::KeyPress,   Qt::Key_Right, Qt::NoModifier));
+    QCoreApplication::postEvent(view, new QKeyEvent(QEvent::KeyRelease, Qt::Key_Right, Qt::NoModifier));
+}
+
+void MainWindow::onGamepadNavUp()
+{
+    if (m_bpOptionsPanel && m_bpOptionsPanel->isVisible()) {
+        m_bpOptionsPanel->navigatePrev();
+        return;
+    }
+    if (m_bpInstanceWindow && m_bpInstanceWindow->isVisible()) {
+        QCoreApplication::postEvent(m_bpInstanceWindow, new QKeyEvent(QEvent::KeyPress,   Qt::Key_Up, Qt::NoModifier));
+        QCoreApplication::postEvent(m_bpInstanceWindow, new QKeyEvent(QEvent::KeyRelease, Qt::Key_Up, Qt::NoModifier));
+        return;
+    }
+    QCoreApplication::postEvent(view, new QKeyEvent(QEvent::KeyPress,   Qt::Key_Up, Qt::NoModifier));
+    QCoreApplication::postEvent(view, new QKeyEvent(QEvent::KeyRelease, Qt::Key_Up, Qt::NoModifier));
+}
+
+void MainWindow::onGamepadNavDown()
+{
+    if (m_bpOptionsPanel && m_bpOptionsPanel->isVisible()) {
+        m_bpOptionsPanel->navigateNext();
+        return;
+    }
+    if (m_bpInstanceWindow && m_bpInstanceWindow->isVisible()) {
+        QCoreApplication::postEvent(m_bpInstanceWindow, new QKeyEvent(QEvent::KeyPress,   Qt::Key_Down, Qt::NoModifier));
+        QCoreApplication::postEvent(m_bpInstanceWindow, new QKeyEvent(QEvent::KeyRelease, Qt::Key_Down, Qt::NoModifier));
+        return;
+    }
+    QCoreApplication::postEvent(view, new QKeyEvent(QEvent::KeyPress,   Qt::Key_Down, Qt::NoModifier));
+    QCoreApplication::postEvent(view, new QKeyEvent(QEvent::KeyRelease, Qt::Key_Down, Qt::NoModifier));
+}
+
+void MainWindow::onGamepadConfirm()
+{
+    if (m_bpOptionsPanel && m_bpOptionsPanel->isVisible()) {
+        m_bpOptionsPanel->confirmCurrent();
+        return;
+    }
+    if (m_bpInstanceWindow && m_bpInstanceWindow->isVisible()) {
+        QCoreApplication::postEvent(m_bpInstanceWindow, new QKeyEvent(QEvent::KeyPress,   Qt::Key_Return, Qt::NoModifier));
+        QCoreApplication::postEvent(m_bpInstanceWindow, new QKeyEvent(QEvent::KeyRelease, Qt::Key_Return, Qt::NoModifier));
+        return;
+    }
+    on_actionLaunchInstance_triggered();
+}
+
+void MainWindow::onGamepadCancel()
+{
+    if (m_bpOptionsPanel && m_bpOptionsPanel->isVisible()) {
+        m_bpOptionsPanel->dismiss();
+        return;
+    }
+    if (m_bpInstanceWindow && m_bpInstanceWindow->isVisible()) {
+        m_bpInstanceWindow->close();
+        return;
+    }
+    // On the main screen B does nothing
+}
+
+void MainWindow::onGamepadInfo()
+{
+    if (m_bpOptionsPanel && m_bpOptionsPanel->isVisible()) return;
+    on_actionEditInstance_triggered();
 }
 
 void MainWindow::updateLaunchButton()
@@ -1433,7 +1642,16 @@ void MainWindow::on_actionEditInstance_triggered()
         return;
 
     if (m_selectedInstance->canEdit()) {
-        APPLICATION->showInstanceWindow(m_selectedInstance);
+        auto* win = APPLICATION->showInstanceWindow(m_selectedInstance);
+        if (win && APPLICATION->settings()->get("BigPictureMode").toBool()) {
+            win->showMaximized();
+            win->raise();
+            win->activateWindow();
+            // Navigate to settings page (first non-console page) by default
+            win->selectPage("settings");
+            m_bpInstanceWindow = win;
+            connect(win, &InstanceWindow::isClosing, this, [this] { m_bpInstanceWindow = nullptr; });
+        }
     } else {
         CustomMessageBox::selectable(this, tr("Instance not editable"),
                                      tr("This instance is not editable. It may be broken, invalid, or too old. Check logs for details."),

@@ -62,3 +62,24 @@ flatbuild
 
 # Snap
 *.snap
+
+# Logs
+*.log
+
+# External libraries (fetched by CMake/vcpkg, not committed)
+libraries/cmark/
+libraries/extra-cmake-modules/
+libraries/filesystem/
+libraries/quazip/
+libraries/tomlplusplus/
+libraries/zlib/
+
+# vcpkg and MSVC build artifacts
+vcpkg_installed/
+build_msvc/
+flatpak/
+
+# Personal build/run scripts
+configure.bat
+build.bat
+run.bat

@@ -48,11 +48,13 @@
 
 #include "BaseInstance.h"
 #include "GamepadController.h"
+#include "ui/BPOptionsMenu.h"
 #include "minecraft/auth/MinecraftAccount.h"
 #include "net/NetJob.h"
 #include "ui/instanceview/InstanceDelegate.h"
 
 class LaunchController;
+class InstanceWindow;
 class NewsChecker;
 class QToolButton;
 class InstanceProxyModel;
@@ -221,6 +223,21 @@ class MainWindow : public QMainWindow {
 
     void refreshCurrentInstance();
 
+    // Big Picture gamepad routing slots
+    void onGamepadNavLeft();
+    void onGamepadNavRight();
+    void onGamepadNavUp();
+    void onGamepadNavDown();
+    void onGamepadConfirm();
+    void onGamepadCancel();
+    void onGamepadInfo();
+
+    // Big Picture group navigation and overlay
+    void bpPrevGroup();
+    void bpNextGroup();
+    void bpShowOptionsMenu();
+    void onBPOptionsAction(BPOptionsMenu::Action action);
+
    private:
     void retranslateUi();
 
@@ -236,6 +253,9 @@ class MainWindow : public QMainWindow {
     void instanceFromInstanceTask(InstanceTask* task);
 
     void applyBigPictureMode();
+    void updateBPHud();
+    void bpJumpToGroup(const QString& groupName);
+    QStringList bpGroupList() const;
 
    private:
     Ui::MainWindow* ui;
@@ -251,6 +271,11 @@ class MainWindow : public QMainWindow {
     KonamiCode* secretEventFilter = nullptr;
     ListViewDelegate* m_listDelegate = nullptr;
     GamepadController* m_gamepad = nullptr;
+
+    // Big Picture state
+    QLabel* m_bpHudLabel = nullptr;
+    BPOptionsMenu* m_bpOptionsPanel = nullptr;  // persistent overlay widget, shown/hidden
+    InstanceWindow* m_bpInstanceWindow = nullptr;
 
     std::shared_ptr<Setting> instanceToolbarSetting = nullptr;
 

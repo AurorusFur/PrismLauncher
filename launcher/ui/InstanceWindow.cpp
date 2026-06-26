@@ -39,6 +39,7 @@
 
 #include <QCloseEvent>
 #include <QHBoxLayout>
+#include <QListView>
 #include <QMessageBox>
 #include <QPushButton>
 #include <QScrollBar>
@@ -213,6 +214,19 @@ bool InstanceWindow::selectPage(QString pageId)
 void InstanceWindow::refreshContainer()
 {
     m_container->refreshContainer();
+}
+
+void InstanceWindow::navigatePage(int delta)
+{
+    // Find the sidebar QListView inside PageContainer and shift its selection
+    auto* list = m_container->findChild<QListView*>();
+    if (!list) return;
+    auto* model = list->model();
+    if (!model) return;
+    int row = list->currentIndex().isValid() ? list->currentIndex().row() : 0;
+    int next = qBound(0, row + delta, model->rowCount() - 1);
+    list->setCurrentIndex(model->index(next, 0));
+    list->setFocus();
 }
 
 BasePage* InstanceWindow::selectedPage() const

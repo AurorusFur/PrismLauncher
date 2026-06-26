@@ -62,6 +62,9 @@ class InstanceWindow : public QMainWindow, public BasePageContainer {
 
     QString instanceId();
 
+    // Move to the next (+1) or previous (-1) page in the sidebar list
+    void navigatePage(int delta);
+
     // save all settings and changes (prepare for launch)
     bool saveAll();
 
