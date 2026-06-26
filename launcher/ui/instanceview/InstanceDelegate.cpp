@@ -42,6 +42,7 @@
 #include <QtMath>
 
 #include <QIcon>
+#include <QPainterPath>
 #include <QTextEdit>
 #include "BaseInstance.h"
 #include "InstanceList.h"
@@ -69,6 +70,11 @@ static void viewItemTextLayout(QTextLayout& textLayout, int lineWidth, qreal& he
 }
 
 ListViewDelegate::ListViewDelegate(QObject* parent) : QStyledItemDelegate(parent) {}
+
+void ListViewDelegate::setBigPictureMode(bool enabled)
+{
+    m_bigPicture = enabled;
+}
 
 void drawSelectionRect(QPainter* painter, const QStyleOptionViewItem& option, const QRect& rect)
 {
@@ -176,10 +182,113 @@ static QSize viewItemTextSize(const QStyleOptionViewItem* option)
     return QSize(size.width() + 2 * textMargin, size.height());
 }
 
+void ListViewDelegate::paintBigPicture(QPainter* painter, const QStyleOptionViewItem& opt, const QModelIndex& index) const
+{
+    painter->save();
+    painter->setRenderHint(QPainter::Antialiasing, true);
+    painter->setClipRect(opt.rect);
+
+    const QRect cardRect = opt.rect.adjusted(BP_CARD_MARGIN, BP_CARD_MARGIN, -BP_CARD_MARGIN, -BP_CARD_MARGIN);
+
+    bool selected = opt.state & QStyle::State_Selected;
+    bool focused  = opt.state & QStyle::State_HasFocus;
+
+    // ── Card background gradient (Steam Deck / console dark style) ──
+    static const QColor bgDark(18, 26, 36);    // near-black blue
+    static const QColor bgMid(28, 42, 58);     // dark slate
+    static const QColor bgSel(38, 62, 92);     // selected — noticeably lighter
+
+    QLinearGradient cardGrad(cardRect.topLeft(), cardRect.bottomLeft());
+    if (selected) {
+        cardGrad.setColorAt(0.0, bgSel.lighter(115));
+        cardGrad.setColorAt(1.0, bgSel);
+    } else {
+        cardGrad.setColorAt(0.0, bgDark);
+        cardGrad.setColorAt(1.0, bgMid);
+    }
+
+    // ── Border ──
+    QPen borderPen(Qt::NoPen);
+    if (selected)
+        borderPen = QPen(QColor(77, 166, 255), BP_BORDER_WIDTH);   // Steam accent blue
+    else if (focused)
+        borderPen = QPen(QColor(160, 160, 160), 2);                // dim white for current item
+
+    painter->setPen(borderPen);
+    painter->setBrush(QBrush(cardGrad));
+    painter->drawRoundedRect(QRectF(cardRect).adjusted(0.5, 0.5, -0.5, -0.5), BP_CARD_RADIUS, BP_CARD_RADIUS);
+
+    // ── Icon ──
+    const int textBarHeight = 52;
+    QRect iconRect = cardRect.adjusted(8, 8, -8, -(textBarHeight + 8));
+
+    QIcon::Mode mode = (opt.state & QStyle::State_Enabled) ? QIcon::Normal : QIcon::Disabled;
+    QIcon::State iconState = (opt.state & QStyle::State_Open) ? QIcon::On : QIcon::Off;
+    opt.icon.paint(painter, iconRect, Qt::AlignCenter, mode, iconState);
+
+    // ── Text bar — semi-transparent strip at bottom ──
+    QRect textBarRect = cardRect;
+    textBarRect.setTop(cardRect.bottom() - textBarHeight);
+
+    QPainterPath barPath;
+    barPath.addRoundedRect(QRectF(textBarRect), 0, 0);
+    // clip bottom corners to card radius
+    QPainterPath cardPath;
+    cardPath.addRoundedRect(QRectF(cardRect), BP_CARD_RADIUS, BP_CARD_RADIUS);
+    painter->setClipPath(cardPath & barPath);
+
+    painter->fillRect(textBarRect, QColor(0, 0, 0, 160));
+
+    painter->setClipRect(opt.rect);
+
+    // ── Text ──
+    QFont labelFont = opt.font;
+    labelFont.setPointSize(labelFont.pointSize() + 1);
+    labelFont.setBold(selected);
+    painter->setFont(labelFont);
+    painter->setPen(selected ? Qt::white : QColor(200, 210, 220));
+
+    QRect textRect = textBarRect.adjusted(8, 4, -8, -4);
+    QTextOption textOption;
+    textOption.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
+    textOption.setAlignment(Qt::AlignHCenter | Qt::AlignVCenter);
+    QTextLayout textLayout;
+    textLayout.setTextOption(textOption);
+    textLayout.setFont(labelFont);
+    textLayout.setText(opt.text);
+
+    qreal layoutWidth, layoutHeight;
+    viewItemTextLayout(textLayout, textRect.width(), layoutHeight, layoutWidth);
+
+    const QRect layoutRect =
+        QStyle::alignedRect(opt.direction, Qt::AlignHCenter | Qt::AlignVCenter, QSize(textRect.width(), int(layoutHeight)), textRect);
+    const QPointF pos = layoutRect.topLeft();
+    for (int i = 0; i < textLayout.lineCount(); ++i)
+        textLayout.lineAt(i).draw(painter, pos);
+
+    // ── Badges and progress ──
+    auto* instance = (BaseInstance*)index.data(InstanceList::InstancePointerRole).value<void*>();
+    if (instance)
+        drawBadges(painter, opt, instance, mode, iconState);
+
+    drawProgressOverlay(painter, opt, index.data(InstanceViewRoles::ProgressValueRole).toInt(),
+                        index.data(InstanceViewRoles::ProgressMaximumRole).toInt());
+
+    painter->restore();
+}
+
 void ListViewDelegate::paint(QPainter* painter, const QStyleOptionViewItem& option, const QModelIndex& index) const
 {
     QStyleOptionViewItem opt = option;
     initStyleOption(&opt, index);
+
+    if (m_bigPicture) {
+        opt.features |= QStyleOptionViewItem::WrapText;
+        opt.text = index.data().toString();
+        paintBigPicture(painter, opt, index);
+        return;
+    }
+
     painter->save();
     painter->setClipRect(opt.rect);
 
@@ -191,7 +300,7 @@ void ListViewDelegate::paint(QPainter* painter, const QStyleOptionViewItem& opti
     QStyle* style = opt.widget ? opt.widget->style() : QApplication::style();
 
     // const int iconSize =  style->pixelMetric(QStyle::PM_IconViewIconSize);
-    const int iconSize = 48;
+    const int iconSize = iconPixelSize();
     QRect iconbox = opt.rect;
     const int textMargin = style->pixelMetric(QStyle::PM_FocusFrameHMargin, 0, opt.widget) + 1;
     QRect textRect = opt.rect;
@@ -321,6 +430,9 @@ void ListViewDelegate::paint(QPainter* painter, const QStyleOptionViewItem& opti
 
 QSize ListViewDelegate::sizeHint(const QStyleOptionViewItem& option, const QModelIndex& index) const
 {
+    if (m_bigPicture)
+        return QSize(BP_ITEM_WIDTH, BP_ITEM_HEIGHT);
+
     QStyleOptionViewItem opt = option;
     initStyleOption(&opt, index);
     opt.features |= QStyleOptionViewItem::WrapText;
@@ -330,11 +442,11 @@ QSize ListViewDelegate::sizeHint(const QStyleOptionViewItem& option, const QMode
 
     QStyle* style = opt.widget ? opt.widget->style() : QApplication::style();
     const int textMargin = style->pixelMetric(QStyle::PM_FocusFrameHMargin, &option, opt.widget) + 1;
-    int height = 48 + textMargin * 2 + 5;  // TODO: turn constants into variables
+    int height = iconPixelSize() + textMargin * 2 + 5;  // TODO: turn constants into variables
     QSize szz = viewItemTextSize(&opt);
     height += szz.height();
     // FIXME: maybe the icon items could scale and keep proportions?
-    QSize sz(100, height);
+    QSize sz(itemPixelWidth(), height);
     return sz;
 }
 
@@ -371,7 +483,7 @@ void ListViewDelegate::updateEditorGeometry(QWidget* editor,
                                             const QStyleOptionViewItem& option,
                                             [[maybe_unused]] const QModelIndex& index) const
 {
-    const int iconSize = 48;
+    const int iconSize = iconPixelSize();
     QRect textRect = option.rect;
     // QStyle *style = option.widget ? option.widget->style() : QApplication::style();
     textRect.adjust(0, iconSize + 5, 0, 0);

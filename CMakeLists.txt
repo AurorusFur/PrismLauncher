@@ -341,6 +341,7 @@ endif()
 
 find_package(ZLIB REQUIRED)
 
+find_package(SDL2 CONFIG REQUIRED)
 
 include(ECMQtDeclareLoggingCategory)
 

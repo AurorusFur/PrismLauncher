@@ -793,6 +793,8 @@ SET(LAUNCHER_SOURCES
     # Application base
     Application.h
     Application.cpp
+    GamepadController.h
+    GamepadController.cpp
     DataMigrationTask.h
     DataMigrationTask.cpp
     ApplicationMessage.h
@@ -1258,6 +1260,7 @@ target_link_libraries(Launcher_logic
     qdcss
     BuildConfig
     Qt${QT_VERSION_MAJOR}::Widgets
+    SDL2::SDL2
 )
 
 if(TARGET PkgConfig::libqrencode)

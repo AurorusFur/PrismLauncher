@@ -25,6 +25,10 @@ class ListViewDelegate : public QStyledItemDelegate {
     explicit ListViewDelegate(QObject* parent = 0);
     virtual ~ListViewDelegate() {}
 
+    void setBigPictureMode(bool enabled);
+
+    static constexpr int BP_ITEM_WIDTH = 260;
+
     void paint(QPainter* painter, const QStyleOptionViewItem& option, const QModelIndex& index) const override;
     QSize sizeHint(const QStyleOptionViewItem& option, const QModelIndex& index) const override;
     void updateEditorGeometry(QWidget* editor, const QStyleOptionViewItem& option, const QModelIndex& index) const override;
@@ -38,4 +42,18 @@ class ListViewDelegate : public QStyledItemDelegate {
 
    private slots:
     void editingDone();
+
+   private:
+    void paintBigPicture(QPainter* painter, const QStyleOptionViewItem& opt, const QModelIndex& index) const;
+
+    static constexpr int BP_ICON_SIZE = 190;
+    static constexpr int BP_ITEM_HEIGHT = 300;
+    static constexpr int BP_CARD_MARGIN = 6;
+    static constexpr int BP_CARD_RADIUS = 12;
+    static constexpr int BP_BORDER_WIDTH = 4;
+
+    int iconPixelSize() const { return m_bigPicture ? BP_ICON_SIZE : 48; }
+    int itemPixelWidth() const { return m_bigPicture ? BP_ITEM_WIDTH : 100; }
+
+    bool m_bigPicture = false;
 };

@@ -162,6 +162,16 @@
             </property>
            </widget>
           </item>
+          <item>
+           <widget class="QCheckBox" name="bigPictureModeCheckBox">
+            <property name="toolTip">
+             <string>Enlarges icons and UI elements for easier touch and controller navigation. Automatically enabled on Steam Deck.</string>
+            </property>
+            <property name="text">
+             <string>Use &amp;controller friendly interface (Big Picture)</string>
+            </property>
+           </widget>
+          </item>
          </layout>
         </widget>
        </item>

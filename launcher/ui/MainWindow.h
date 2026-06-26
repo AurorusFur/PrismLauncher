@@ -47,7 +47,10 @@
 #include <QTimer>
 
 #include "BaseInstance.h"
+#include "GamepadController.h"
 #include "minecraft/auth/MinecraftAccount.h"
+#include "net/NetJob.h"
+#include "ui/instanceview/InstanceDelegate.h"
 
 class LaunchController;
 class NewsChecker;
@@ -232,6 +235,8 @@ class MainWindow : public QMainWindow {
     void runModalTask(Task* task);
     void instanceFromInstanceTask(InstanceTask* task);
 
+    void applyBigPictureMode();
+
    private:
     Ui::MainWindow* ui;
     // these are managed by Qt's memory management model!
@@ -244,6 +249,8 @@ class MainWindow : public QMainWindow {
     LabeledToolButton* renameButton = nullptr;
     QToolButton* helpMenuButton = nullptr;
     KonamiCode* secretEventFilter = nullptr;
+    ListViewDelegate* m_listDelegate = nullptr;
+    GamepadController* m_gamepad = nullptr;
 
     std::shared_ptr<Setting> instanceToolbarSetting = nullptr;
 

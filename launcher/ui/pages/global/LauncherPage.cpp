@@ -200,6 +200,7 @@ void LauncherPage::applySettings()
     }
 
     s->set("MenuBarInsteadOfToolBar", ui->preferMenuBarCheckBox->isChecked());
+    s->set("BigPictureMode", ui->bigPictureModeCheckBox->isChecked());
 
     s->set("NumberOfConcurrentTasks", ui->numberOfConcurrentTasksSpinBox->value());
     s->set("NumberOfConcurrentDownloads", ui->numberOfConcurrentDownloadsSpinBox->value());
@@ -258,6 +259,8 @@ void LauncherPage::loadSettings()
     }
 
     ui->preferMenuBarCheckBox->setChecked(s->get("MenuBarInsteadOfToolBar").toBool());
+
+    ui->bigPictureModeCheckBox->setChecked(s->get("BigPictureMode").toBool());
 
     ui->numberOfConcurrentTasksSpinBox->setValue(s->get("NumberOfConcurrentTasks").toInt());
     ui->numberOfConcurrentDownloadsSpinBox->setValue(s->get("NumberOfConcurrentDownloads").toInt());

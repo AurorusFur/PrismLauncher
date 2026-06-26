@@ -798,6 +798,8 @@ Application::Application(int& argc, char** argv) : QApplication(argc, argv)
 
         m_settings->registerSetting("ToolbarsLocked", false);
 
+        m_settings->registerSetting("BigPictureMode", qgetenv("XDG_CURRENT_DESKTOP") == "gamescope");
+
         // Instance
         m_settings->registerSetting("InstSortMode", "Name");
         m_settings->registerSetting("InstRenamingMode", "AskEverytime");

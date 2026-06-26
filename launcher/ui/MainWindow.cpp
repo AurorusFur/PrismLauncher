@@ -295,9 +295,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), ui(new Ui::MainWi
         view = new InstanceView(ui->centralWidget);
 
         view->setSelectionMode(QAbstractItemView::SingleSelection);
-        // FIXME: leaks ListViewDelegate
-        auto delegate = new ListViewDelegate(this);
-        view->setItemDelegate(delegate);
+        m_listDelegate = new ListViewDelegate(this);
+        auto delegate = m_listDelegate;
+        view->setItemDelegate(m_listDelegate);
         view->setFrameShape(QFrame::NoFrame);
         // do not show ugly blue border on the mac
         view->setAttribute(Qt::WA_MacShowFocusRect, false);
@@ -432,6 +432,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), ui(new Ui::MainWi
 
     // removing this looks stupid
     view->setFocus();
+
+    // Defer Big Picture mode so it runs after restoreGeometry() in Application::showMainWindow()
+    QTimer::singleShot(0, this, &MainWindow::applyBigPictureMode);
 
     retranslateUi();
 }
@@ -594,6 +597,49 @@ void MainWindow::updateMainToolBar()
 {
     ui->menuBar->setVisible(APPLICATION->settings()->get("MenuBarInsteadOfToolBar").toBool());
     ui->mainToolBar->setVisible(ui->menuBar->isNativeMenuBar() || !APPLICATION->settings()->get("MenuBarInsteadOfToolBar").toBool());
+}
+
+void MainWindow::applyBigPictureMode()
+{
+    bool bigPicture = APPLICATION->settings()->get("BigPictureMode").toBool();
+
+    if (bigPicture) {
+        showMaximized();
+        ui->mainToolBar->setIconSize(QSize(48, 48));
+        ui->instanceToolBar->setIconSize(QSize(48, 48));
+    } else {
+        ui->mainToolBar->setIconSize(QSize());
+        ui->instanceToolBar->setIconSize(QSize());
+    }
+
+    if (m_listDelegate) {
+        m_listDelegate->setBigPictureMode(bigPicture);
+    }
+    view->setSpacing(bigPicture ? 12 : 5);
+    view->setItemWidth(bigPicture ? ListViewDelegate::BP_ITEM_WIDTH : 100);
+    view->viewport()->update();
+
+    // Gamepad: create when entering Big Picture, destroy when leaving
+    if (bigPicture && !m_gamepad) {
+        m_gamepad = new GamepadController(this);
+        auto sendKey = [this](Qt::Key key) {
+            QKeyEvent* press = new QKeyEvent(QEvent::KeyPress, key, Qt::NoModifier);
+            QKeyEvent* release = new QKeyEvent(QEvent::KeyRelease, key, Qt::NoModifier);
+            QCoreApplication::postEvent(view, press);
+            QCoreApplication::postEvent(view, release);
+        };
+        connect(m_gamepad, &GamepadController::navigateLeft,  this, [sendKey]{ sendKey(Qt::Key_Left); });
+        connect(m_gamepad, &GamepadController::navigateRight, this, [sendKey]{ sendKey(Qt::Key_Right); });
+        connect(m_gamepad, &GamepadController::navigateUp,    this, [sendKey]{ sendKey(Qt::Key_Up); });
+        connect(m_gamepad, &GamepadController::navigateDown,  this, [sendKey]{ sendKey(Qt::Key_Down); });
+        connect(m_gamepad, &GamepadController::confirmPressed, this, &MainWindow::on_actionLaunchInstance_triggered);
+        connect(m_gamepad, &GamepadController::cancelPressed,  this, [sendKey]{ sendKey(Qt::Key_Escape); });
+        connect(m_gamepad, &GamepadController::optionsPressed, this, [sendKey]{ sendKey(Qt::Key_Menu); });
+        connect(m_gamepad, &GamepadController::infoPressed,    this, &MainWindow::on_actionEditInstance_triggered);
+    } else if (!bigPicture && m_gamepad) {
+        delete m_gamepad;
+        m_gamepad = nullptr;
+    }
 }
 
 void MainWindow::updateLaunchButton()
@@ -1374,6 +1420,7 @@ void MainWindow::globalSettingsClosed()
     updateLaunchButton();
     updateThemeMenu();
     updateStatusCenter();
+    applyBigPictureMode();
     // This needs to be done to prevent UI elements disappearing in the event the config is changed
     // but Prism Launcher exits abnormally, causing the window state to never be saved:
     APPLICATION->settings()->set("MainWindowState", QString::fromUtf8(saveState().toBase64()));

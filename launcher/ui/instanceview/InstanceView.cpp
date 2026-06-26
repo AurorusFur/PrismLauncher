@@ -271,6 +271,18 @@ int InstanceView::itemWidth() const
     return m_itemWidth;
 }
 
+void InstanceView::setItemWidth(int width)
+{
+    m_itemWidth = width;
+    updateGeometries();
+}
+
+void InstanceView::setSpacing(int spacing)
+{
+    m_spacing = spacing;
+    updateGeometries();
+}
+
 void InstanceView::mousePressEvent(QMouseEvent* event)
 {
     executeDelayedItemsLayout();
@@ -537,7 +549,10 @@ void InstanceView::paintEvent([[maybe_unused]] QPaintEvent* event)
         } else {
             option.state &= ~QStyle::State_Selected;
         }
-        option.state |= (index == currentIndex()) ? QStyle::State_HasFocus : QStyle::State_None;
+        if (index == currentIndex())
+            option.state |= QStyle::State_HasFocus;
+        else
+            option.state &= ~QStyle::State_HasFocus;
         if (!(flags & Qt::ItemIsEnabled)) {
             option.state &= ~QStyle::State_Enabled;
         }
