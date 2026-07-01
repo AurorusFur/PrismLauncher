@@ -38,6 +38,7 @@
 #include "ModFolderModel.h"
 
 #include <FileSystem.h>
+#include <IBigPicturePrompt.h>
 #include <QAbstractButton>
 #include <QDebug>
 #include <QFileInfo>
@@ -464,11 +465,20 @@ bool ModFolderModel::setResourceEnabled(const QModelIndexList& indexes, EnableAc
             yesButton = tr("Disable Required");
         }
 
-        auto* box = CustomMessageBox::selectable(nullptr, title, message, QMessageBox::Warning,
-                                                 QMessageBox::Yes | QMessageBox::No | QMessageBox::Cancel, QMessageBox::No);
-        box->button(QMessageBox::No)->setText(noButton);
-        box->button(QMessageBox::Yes)->setText(yesButton);
-        auto response = box->exec();
+        int response;
+        if (auto* bpPrompt = IBigPicturePrompt::instance()) {
+            // In Big Picture mode: show inline controller-friendly prompt.
+            // Button order: [yesButton, noButton, Cancel] → indices 0, 1, 2
+            const QStringList buttons = { yesButton, noButton, tr("Cancel") };
+            const int choice = bpPrompt->execPrompt(title, message, buttons);
+            response = (choice == 0) ? QMessageBox::Yes : (choice == 1) ? QMessageBox::No : QMessageBox::Cancel;
+        } else {
+            auto* box = CustomMessageBox::selectable(nullptr, title, message, QMessageBox::Warning,
+                                                     QMessageBox::Yes | QMessageBox::No | QMessageBox::Cancel, QMessageBox::No);
+            box->button(QMessageBox::No)->setText(noButton);
+            box->button(QMessageBox::Yes)->setText(yesButton);
+            response = box->exec();
+        }
 
         if (response == QMessageBox::Yes) {
             toEnable |= requiredToEnable;

@@ -830,6 +830,8 @@ SET(LAUNCHER_SOURCES
     logs/AnonymizeLog.h
 
     # GUI - windows
+    IBigPicturePrompt.h
+    ui/BPHud.h
     ui/BPOptionsMenu.h
     ui/BPOptionsMenu.cpp
     ui/BPSettingsOverlay.h

@@ -10,6 +10,8 @@
 
 #include "BPOptionsMenu.h"
 
+#include "ui/BPHud.h"
+
 #include <QKeyEvent>
 #include <QLabel>
 #include <QPainter>
@@ -93,7 +95,8 @@ BPOptionsMenu::BPOptionsMenu(QWidget* parent) : QWidget(parent)
         m_buttons << btn;
     }
 
-    auto* hint = new QLabel(tr("[B]  Cancel"), m_card);
+    auto* hint = new QLabel(bpHudHtml(tr("[↑↓] Navigate    [A] Select    [B] Cancel")), m_card);
+    hint->setTextFormat(Qt::RichText);
     hint->setAlignment(Qt::AlignHCenter | Qt::AlignVCenter);
     hint->setStyleSheet("QLabel { color: #506070; font-size: 13px; background: transparent; border: none; }");
     m_card->setProperty("hint", QVariant::fromValue(static_cast<QObject*>(hint)));
@@ -164,7 +167,8 @@ void BPOptionsMenu::resizeEvent(QResizeEvent* event)
 void BPOptionsMenu::paintEvent(QPaintEvent*)
 {
     QPainter p(this);
-    p.fillRect(rect(), QColor(4, 8, 16));
+    // Translucent scrim — keep the instance grid visible, dimmed, behind the card.
+    p.fillRect(rect(), QColor(4, 8, 16, 215));
 
     const QRect cr = m_card ? m_card->geometry() : rect();
     const int glow = 80;

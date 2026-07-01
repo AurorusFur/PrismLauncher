@@ -41,6 +41,7 @@
 
 #include <QAbstractItemView>
 #include <QDialogButtonBox>
+#include <QScrollArea>
 #include <QGridLayout>
 #include <QLabel>
 #include <QLineEdit>
@@ -287,30 +288,16 @@ bool PageContainer::saveAll()
 void PageContainer::setBigPictureMode(bool bp)
 {
     auto* delegate = static_cast<PageViewDelegate*>(m_pageList->itemDelegate());
+    delegate->setMinHeight(bp ? 52 : 32);
     if (bp) {
-        delegate->setMinHeight(52);
-        m_pageList->setStyleSheet(
-            "QListView {"
-            "  background: #060c14;"
-            "  border: none;"
-            "  border-right: 1px solid #1a2a3a;"
-            "  color: #90b0d0;"
-            "  font-size: 14px;"
-            "  outline: none;"
-            "}"
-            "QListView::item {"
-            "  padding: 6px 10px;"
-            "  border-bottom: 1px solid #111d2a;"
-            "}"
-            "QListView::item:selected {"
-            "  background: #1a3a5a;"
-            "  color: #ffffff;"
-            "  border-left: 3px solid #5aadff;"
-            "}");
-        m_header->setStyleSheet("QLabel { color: #cce0ff; font-size: 15px; background: transparent; }");
+        // The page list is hidden in Big Picture mode (the overlay provides its own
+        // sidebar); give the page content itself breathing room for TV viewing and
+        // let the header follow the palette so light themes stay readable.
+        m_pageStack->setContentsMargins(24, 8, 24, 16);
+        // padding-left lines the header up with the indented page content below it
+        m_header->setStyleSheet("QLabel { font-size: 18px; font-weight: bold; background: transparent; padding-left: 14px; }");
     } else {
-        delegate->setMinHeight(32);
-        m_pageList->setStyleSheet(QString());
+        m_pageStack->setContentsMargins(0, 0, 0, 0);
         m_header->setStyleSheet(QString());
     }
     m_pageList->reset();

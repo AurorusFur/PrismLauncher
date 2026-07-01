@@ -1,4 +1,5 @@
 #include "ResourceFolderModel.h"
+#include <IBigPicturePrompt.h>
 #include <QMessageBox>
 
 #include <QCoreApplication>
@@ -276,16 +277,19 @@ void ResourceFolderModel::deleteMetadata(const QModelIndexList& indexes)
 bool ResourceFolderModel::setResourceEnabled(const QModelIndexList& indexes, EnableAction action)
 {
     if (m_instance != nullptr && m_instance->isRunning()) {
-        auto response =
-            CustomMessageBox::selectable(nullptr, tr("Confirm toggle"),
-                                         tr("If you enable/disable this resource while the game is running it may crash your game.\n"
-                                            "Are you sure you want to do this?"),
-                                         QMessageBox::Warning, QMessageBox::Yes | QMessageBox::No, QMessageBox::No)
-                ->exec();
-
-        if (response != QMessageBox::Yes) {
-            return false;
+        const QString title = tr("Confirm toggle");
+        const QString msg   = tr("If you enable/disable this resource while the game is running it may crash your game.\n"
+                                 "Are you sure you want to do this?");
+        int response;
+        if (auto* bpPrompt = IBigPicturePrompt::instance()) {
+            const int choice = bpPrompt->execPrompt(title, msg, { tr("Yes"), tr("No") });
+            response = (choice == 0) ? QMessageBox::Yes : QMessageBox::No;
+        } else {
+            response = CustomMessageBox::selectable(nullptr, title, msg,
+                           QMessageBox::Warning, QMessageBox::Yes | QMessageBox::No, QMessageBox::No)->exec();
         }
+        if (response != QMessageBox::Yes)
+            return false;
     }
 
     if (indexes.isEmpty()) {
