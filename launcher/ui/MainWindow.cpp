@@ -614,12 +614,16 @@ void MainWindow::applyBigPictureMode()
         ui->instanceToolBar->hide();
         ui->newsToolBar->hide();
         ui->menuBar->hide();
+
+        // Palette-based styling so the main screen matches the settings overlay
+        const QPalette& pal = QApplication::palette();
+        const QColor base = pal.color(QPalette::Base);
+        const QColor mid = pal.color(QPalette::Mid);
+        const QColor text = pal.color(QPalette::WindowText);
+
         ui->statusBar->setStyleSheet(
-            "QStatusBar {"
-            "  background: #060c14;"
-            "  border-top: 1px solid #1a2a3a;"
-            "  color: #7090a8;"
-            "}");
+            QString("QStatusBar { background: %1; border-top: 1px solid %2; color: %3; }")
+                .arg(base.darker(115).name(), mid.name(), text.name()));
         ui->statusBar->show();
         // Replace status bar content with controller hint bar
         m_statusLeft->hide();
@@ -628,10 +632,29 @@ void MainWindow::applyBigPictureMode()
             m_bpHudLabel = new QLabel(this);
             m_bpHudLabel->setTextFormat(Qt::RichText);
             m_bpHudLabel->setAlignment(Qt::AlignCenter);
-            m_bpHudLabel->setStyleSheet("QLabel { color: #7090a8; font-size: 13px; background: transparent; }");
             ui->statusBar->addWidget(m_bpHudLabel, 1);
         }
+        m_bpHudLabel->setStyleSheet(
+            QString("QLabel { color: %1; font-size: 13px; background: transparent; }").arg(text.name()));
         updateBPHud();
+
+        // Title header — same design language as the overlay's title bar
+        if (!m_bpHeader) {
+            m_bpHeader = new QLabel(this);
+            QFont f = m_bpHeader->font();
+            f.setPixelSize(18);
+            f.setBold(true);
+            m_bpHeader->setFont(f);
+            m_bpHeader->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+        }
+        m_bpHeader->setText(tr("Prism Launcher  ›  Instances"));
+        m_bpHeader->setStyleSheet(
+            QString("QLabel { background: %1; color: %2; border-bottom: 1px solid %3; padding-left: 20px; }")
+                .arg(base.name(), text.name(), mid.name()));
+        setContentsMargins(0, BP_HEADER_H, 0, 0);  // make room above the central area
+        m_bpHeader->setGeometry(0, 0, width(), BP_HEADER_H);
+        m_bpHeader->show();
+        m_bpHeader->raise();
     } else {
         // Restore toolbar visibility
         ui->mainToolBar->show();
@@ -647,6 +670,11 @@ void MainWindow::applyBigPictureMode()
         }
         m_statusLeft->show();
         m_statusCenter->show();
+        if (m_bpHeader) {
+            delete m_bpHeader;
+            m_bpHeader = nullptr;
+        }
+        setContentsMargins(0, 0, 0, 0);
     }
 
     if (m_listDelegate)
@@ -694,6 +722,30 @@ void MainWindow::applyBigPictureMode()
         delete m_bpSettingsOverlay;
         m_bpSettingsOverlay = nullptr;
     }
+
+    // In-window dialog host: Big Picture must not spawn extra windows, so every
+    // QDialog shown while it's active (resource downloader, version select,
+    // progress/message boxes…) gets reparented into this host. The app-wide
+    // event filter below catches their Show events.
+    if (bigPicture && !m_bpDialogHost) {
+        m_bpDialogHost = new BPDialogHost(this);
+        qApp->installEventFilter(this);
+    } else if (!bigPicture && m_bpDialogHost) {
+        qApp->removeEventFilter(this);
+        delete m_bpDialogHost;
+        m_bpDialogHost = nullptr;
+    }
+
+    // Controller-native mod download manager; pages find it via activeInstance()
+    // and open it instead of the desktop ResourceDownloadDialog.
+    if (bigPicture && !m_bpResourceBrowser) {
+        m_bpResourceBrowser = new BPResourceBrowser(this);
+        BPResourceBrowser::setActiveInstance(m_bpResourceBrowser);
+    } else if (!bigPicture && m_bpResourceBrowser) {
+        BPResourceBrowser::setActiveInstance(nullptr);
+        delete m_bpResourceBrowser;
+        m_bpResourceBrowser = nullptr;
+    }
 }
 
 void MainWindow::updateBPHud()
@@ -731,6 +783,11 @@ void MainWindow::bpJumpToGroup(const QString& groupName)
 
 void MainWindow::bpPrevGroup()
 {
+    if (routeGamepadToDialog(Qt::Key_PageUp)) return;
+    if (m_bpResourceBrowser && m_bpResourceBrowser->isVisible()) {
+        m_bpResourceBrowser->pageUp();
+        return;
+    }
     if (m_bpOptionsPanel && m_bpOptionsPanel->isVisible()) return;
     if (m_bpSettingsOverlay && m_bpSettingsOverlay->isVisible()) {
         m_bpSettingsOverlay->tabLeft();
@@ -746,6 +803,11 @@ void MainWindow::bpPrevGroup()
 
 void MainWindow::bpNextGroup()
 {
+    if (routeGamepadToDialog(Qt::Key_PageDown)) return;
+    if (m_bpResourceBrowser && m_bpResourceBrowser->isVisible()) {
+        m_bpResourceBrowser->pageDown();
+        return;
+    }
     if (m_bpOptionsPanel && m_bpOptionsPanel->isVisible()) return;
     if (m_bpSettingsOverlay && m_bpSettingsOverlay->isVisible()) {
         m_bpSettingsOverlay->tabRight();
@@ -761,6 +823,11 @@ void MainWindow::bpNextGroup()
 
 void MainWindow::bpShowOptionsMenu()
 {
+    if (routeGamepadToDialog(Qt::Key_Tab)) return;  // X — focus next field in dialogs
+    if (m_bpResourceBrowser && m_bpResourceBrowser->isVisible()) {
+        m_bpResourceBrowser->focusSearch();
+        return;
+    }
     if (!m_bpOptionsPanel || !m_selectedInstance) return;
     if (m_bpOptionsPanel->isVisible()) return;
     if (m_bpSettingsOverlay && m_bpSettingsOverlay->isVisible()) {
@@ -791,9 +858,35 @@ void MainWindow::onBPOptionsAction(BPOptionsMenu::Action action)
 
 // ── Gamepad routing slots ───────────────────────────────────────────────────
 
+// While a dialog is open — either a real modal window or one hosted in-window by
+// BPDialogHost — the gamepad drives that dialog: the button's key is posted to the
+// widget that actually has focus inside it (falling back to the dialog's preferred
+// focus child, which we then focus so Tab traversal starts from the right place).
+// Returns false when no dialog is active.
+bool MainWindow::routeGamepadToDialog(Qt::Key key)
+{
+    QWidget* dialog = QApplication::activeModalWidget();
+    if (!dialog && m_bpDialogHost && m_bpDialogHost->isVisible())
+        dialog = m_bpDialogHost->activeDialog();
+    if (!dialog)
+        return false;
+
+    QWidget* fw = QApplication::focusWidget();
+    QWidget* target = (fw && dialog->isAncestorOf(fw)) ? fw : BPDialogHost::preferredFocusChild(dialog);
+    if (!target)
+        target = dialog;
+    if (target != fw)
+        target->setFocus(Qt::OtherFocusReason);
+
+    QCoreApplication::postEvent(target, new QKeyEvent(QEvent::KeyPress, key, Qt::NoModifier));
+    QCoreApplication::postEvent(target, new QKeyEvent(QEvent::KeyRelease, key, Qt::NoModifier));
+    return true;
+}
 
 void MainWindow::onGamepadNavLeft()
 {
+    if (routeGamepadToDialog(Qt::Key_Left)) return;
+    if (m_bpResourceBrowser && m_bpResourceBrowser->isVisible()) return;
     if (m_bpOptionsPanel && m_bpOptionsPanel->isVisible()) return;
     if (m_bpSettingsOverlay && m_bpSettingsOverlay->isVisible()) {
         m_bpSettingsOverlay->navLeft();
@@ -805,6 +898,8 @@ void MainWindow::onGamepadNavLeft()
 
 void MainWindow::onGamepadNavRight()
 {
+    if (routeGamepadToDialog(Qt::Key_Right)) return;
+    if (m_bpResourceBrowser && m_bpResourceBrowser->isVisible()) return;
     if (m_bpOptionsPanel && m_bpOptionsPanel->isVisible()) return;
     if (m_bpSettingsOverlay && m_bpSettingsOverlay->isVisible()) {
         m_bpSettingsOverlay->navRight();
@@ -816,6 +911,11 @@ void MainWindow::onGamepadNavRight()
 
 void MainWindow::onGamepadNavUp()
 {
+    if (routeGamepadToDialog(Qt::Key_Up)) return;
+    if (m_bpResourceBrowser && m_bpResourceBrowser->isVisible()) {
+        m_bpResourceBrowser->navUp();
+        return;
+    }
     if (m_bpOptionsPanel && m_bpOptionsPanel->isVisible()) {
         m_bpOptionsPanel->navigatePrev();
         return;
@@ -830,6 +930,11 @@ void MainWindow::onGamepadNavUp()
 
 void MainWindow::onGamepadNavDown()
 {
+    if (routeGamepadToDialog(Qt::Key_Down)) return;
+    if (m_bpResourceBrowser && m_bpResourceBrowser->isVisible()) {
+        m_bpResourceBrowser->navDown();
+        return;
+    }
     if (m_bpOptionsPanel && m_bpOptionsPanel->isVisible()) {
         m_bpOptionsPanel->navigateNext();
         return;
@@ -844,6 +949,11 @@ void MainWindow::onGamepadNavDown()
 
 void MainWindow::onGamepadConfirm()
 {
+    if (routeGamepadToDialog(Qt::Key_Return)) return;
+    if (m_bpResourceBrowser && m_bpResourceBrowser->isVisible()) {
+        m_bpResourceBrowser->doConfirm();
+        return;
+    }
     if (m_bpOptionsPanel && m_bpOptionsPanel->isVisible()) {
         m_bpOptionsPanel->confirmCurrent();
         return;
@@ -866,6 +976,11 @@ void MainWindow::onGamepadConfirm()
 
 void MainWindow::onGamepadCancel()
 {
+    if (routeGamepadToDialog(Qt::Key_Escape)) return;
+    if (m_bpResourceBrowser && m_bpResourceBrowser->isVisible()) {
+        m_bpResourceBrowser->doCancel();
+        return;
+    }
     if (m_bpOptionsPanel && m_bpOptionsPanel->isVisible()) {
         m_bpOptionsPanel->dismiss();
         return;
@@ -887,6 +1002,11 @@ void MainWindow::onGamepadCancel()
 
 void MainWindow::onGamepadInfo()
 {
+    if (routeGamepadToDialog(Qt::Key_Backtab)) return;  // Y — focus previous field in dialogs
+    if (m_bpResourceBrowser && m_bpResourceBrowser->isVisible()) {
+        m_bpResourceBrowser->toggleProvider();
+        return;
+    }
     if (m_bpOptionsPanel && m_bpOptionsPanel->isVisible()) return;
     if (m_bpSettingsOverlay && m_bpSettingsOverlay->isVisible()) {
         if (m_bpSettingsOverlay->mode() == BPSettingsOverlay::Mode::ActionMenu) return;
@@ -901,6 +1021,8 @@ void MainWindow::onGamepadInfo()
 
 void MainWindow::onGamepadStart()
 {
+    if (routeGamepadToDialog(Qt::Key_Space)) return;  // Start — toggle/click in dialogs
+    if (m_bpResourceBrowser && m_bpResourceBrowser->isVisible()) return;
     if (m_bpOptionsPanel && m_bpOptionsPanel->isVisible()) return;
     if (m_bpSettingsOverlay && m_bpSettingsOverlay->isVisible()) {
         if (m_bpSettingsOverlay->mode() == BPSettingsOverlay::Mode::Content)
@@ -1089,6 +1211,15 @@ void MainWindow::defaultAccountChanged()
 
 bool MainWindow::eventFilter(QObject* obj, QEvent* ev)
 {
+    // Big Picture: reparent any QDialog being shown into the in-window host so no
+    // separate windows ever appear. Native dialogs (file pickers) never emit a
+    // widget Show event, so they are naturally excluded.
+    if (m_bpDialogHost && ev->type() == QEvent::Show) {
+        if (auto* dlg = qobject_cast<QDialog*>(obj);
+            dlg && dlg->isWindow() && !dlg->property("bpHosted").toBool())
+            m_bpDialogHost->hostDialog(dlg);
+    }
+
     // Route physical arrow/confirm/cancel key presses to the overlay nav slots.
     // nativeScanCode() == 0 for synthetic events (our own postEvent calls), so we
     // only intercept real hardware events and avoid re-entering the nav handlers.
@@ -1935,6 +2066,22 @@ void MainWindow::changeEvent(QEvent* event)
         retranslateUi();
     }
     QMainWindow::changeEvent(event);
+}
+
+void MainWindow::resizeEvent(QResizeEvent* event)
+{
+    QMainWindow::resizeEvent(event);
+    // Keep the full-window Big Picture layers glued to the window size.
+    if (m_bpHeader)
+        m_bpHeader->setGeometry(0, 0, width(), BP_HEADER_H);
+    if (m_bpSettingsOverlay && m_bpSettingsOverlay->isVisible())
+        m_bpSettingsOverlay->setGeometry(0, 0, width(), height());
+    if (m_bpOptionsPanel && m_bpOptionsPanel->isVisible())
+        m_bpOptionsPanel->setGeometry(0, 0, width(), height());
+    if (m_bpDialogHost && m_bpDialogHost->isVisible())
+        m_bpDialogHost->setGeometry(0, 0, width(), height());
+    if (m_bpResourceBrowser && m_bpResourceBrowser->isVisible())
+        m_bpResourceBrowser->setGeometry(0, 0, width(), height());
 }
 
 void MainWindow::instanceActivated(QModelIndex index)

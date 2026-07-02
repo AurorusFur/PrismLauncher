@@ -47,66 +47,13 @@
 #include "Application.h"
 #include "BaseInstance.h"
 #include "InstancePageProvider.h"
+#include "ui/BPFocusRing.h"
 #include "ui/BPHud.h"
+#include "ui/BPStyle.h"
 #include "ui/pages/BasePage.h"
 #include "ui/widgets/PageContainer.h"
 
 static const QSet<QString> kHiddenPageIds = { "coremods", "nilmods" };
-
-// Stylesheet applied to PageContainer widgets in big-screen mode.
-// Increases font sizes, control heights, and row heights for comfortable couch/TV use.
-static const QString kBigScreenFormStyle =
-    // Base: readable-from-the-couch text everywhere (labels, editors, item views)
-    "QWidget          { font-size: 15px; }"
-    // Form controls: generous hit targets
-    "QCheckBox        { spacing: 10px; min-height: 30px; }"
-    "QCheckBox::indicator { width: 22px; height: 22px; }"
-    "QRadioButton     { spacing: 10px; min-height: 30px; }"
-    "QRadioButton::indicator { width: 22px; height: 22px; }"
-    "QLineEdit        { min-height: 36px; padding: 2px 8px; }"
-    "QSpinBox, QDoubleSpinBox { min-height: 36px; }"
-    "QComboBox        { min-height: 36px; }"
-    "QComboBox QAbstractItemView { font-size: 15px; }"
-    "QComboBox QAbstractItemView::item { min-height: 34px; }"
-    "QPushButton      { min-height: 40px; padding: 4px 16px; }"
-    "QToolButton      { min-height: 36px; padding: 4px 10px; }"
-    "QGroupBox        { font-weight: bold; }"
-    "QGroupBox QWidget { font-weight: normal; }"  // don't let the bold title cascade into children
-    "QTabBar::tab     { padding: 10px 20px; }"
-    // Item views (mods, versions, worlds, servers, screenshots): tall selectable rows
-    "QTreeView::item, QListView::item, QTableView::item { min-height: 38px; padding: 2px 6px; }"
-    "QHeaderView::section { min-height: 34px; padding: 4px 8px; font-weight: bold; }"
-    // Scrollbars stay visible from a distance
-    "QScrollBar:vertical   { width: 16px; }"
-    "QScrollBar:horizontal { height: 16px; }";
-
-// Console-style focus indicator: a highlight-colored rounded ring drawn on top of
-// whatever widget currently has keyboard focus inside the page content. The native
-// dotted focus rectangle is invisible from a couch; this is not.
-class FocusRingWidget : public QWidget {
-public:
-    explicit FocusRingWidget(QWidget* parent) : QWidget(parent)
-    {
-        setAttribute(Qt::WA_TransparentForMouseEvents);
-        hide();
-    }
-
-protected:
-    void paintEvent(QPaintEvent*) override
-    {
-        QPainter p(this);
-        p.setRenderHint(QPainter::Antialiasing);
-        // While a value is being edited (spinbox edit mode) the ring turns amber
-        // so the user can tell "navigating" apart from "adjusting".
-        const QColor hl = property("editing").toBool() ? QColor(0xd8, 0xb9, 0x44)
-                                                       : QApplication::palette().color(QPalette::Highlight);
-        QColor fill = hl;
-        fill.setAlpha(22);
-        p.setPen(QPen(hl, 3));
-        p.setBrush(fill);
-        p.drawRoundedRect(QRectF(rect()).adjusted(2, 2, -2, -2), 6, 6);
-    }
-};
 
 // Forward-declare helpers used inside the constructor lambda.
 static bool isPopupOpen();
@@ -696,6 +643,9 @@ void BPSettingsOverlay::buildActionPopup()
         m_actionHud->setFont(f);
     }
 
+    // Mouse support: clicking a row selects it, so activate on click too.
+    connect(m_actionList, &QListWidget::itemClicked, this, [this](QListWidgetItem*) { confirmActionMenu(); });
+
     auto* layout = new QVBoxLayout(m_actionCard);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(0);
@@ -795,9 +745,12 @@ void BPSettingsOverlay::showActionMenu()
 void BPSettingsOverlay::confirmActionMenu()
 {
     const int row = m_actionList->currentRow();
+    // Close the menu *before* running the action (standard menu behavior). This
+    // also means a confirmation prompt raised by the action is the only card on
+    // screen instead of stacking on top of the menu.
+    dismissActionMenu();
     if (row >= 0 && row < m_currentActions.size() && m_currentActions[row]->isEnabled())
         m_currentActions[row]->trigger();
-    dismissActionMenu();
 }
 
 void BPSettingsOverlay::dismissActionMenu()
@@ -856,6 +809,9 @@ void BPSettingsOverlay::buildPromptCard()
         m_promptHud->setFont(f);
     }
 
+    // Mouse support: a click both selects and confirms the option.
+    connect(m_promptList, &QListWidget::itemClicked, this, [this](QListWidgetItem*) { confirmPrompt(); });
+
     auto* layout = new QVBoxLayout(m_promptCard);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(0);
@@ -895,6 +851,12 @@ void BPSettingsOverlay::positionPromptCard()
 
 int BPSettingsOverlay::execPrompt(const QString& title, const QString& msg, const QStringList& buttons, int defaultIndex)
 {
+    // Never stack cards: if the action menu is somehow still open, the prompt
+    // replaces it and brings it back once answered.
+    const bool restoreActionMenu = m_actionCard && m_actionCard->isVisible();
+    if (restoreActionMenu)
+        m_actionCard->hide();
+
     m_promptTitle->setText(title);
     m_promptMessage->setText(msg);
     m_promptList->clear();
@@ -915,14 +877,22 @@ int BPSettingsOverlay::execPrompt(const QString& title, const QString& msg, cons
     m_mode = Mode::PromptCard;
     updateHud();
 
+    // Save/restore any outer prompt loop so a nested prompt can't orphan it
+    // (an orphaned loop never quits and freezes the launcher).
+    QEventLoop* prevLoop = m_promptLoop;
     QEventLoop loop;
     m_promptLoop = &loop;
     loop.exec();
-    m_promptLoop = nullptr;
+    m_promptLoop = prevLoop;
 
     m_promptCard->hide();
-    if (m_modalScrim && !m_actionCard->isVisible())
+    if (restoreActionMenu) {
+        m_actionCard->show();
+        m_actionCard->raise();
+        m_actionList->setFocus();
+    } else if (m_modalScrim && !m_actionCard->isVisible()) {
         m_modalScrim->hide();
+    }
     m_mode = prevMode;
     updateHud();
 
@@ -1146,7 +1116,7 @@ void BPSettingsOverlay::rebuild(BaseInstance* instance)
     m_container = new PageContainer(m_provider.get(), "settings", this);
     m_container->hidePageList();
     m_container->setBigPictureMode(true);
-    m_container->setStyleSheet(kBigScreenFormStyle);
+    m_container->setStyleSheet(bpBigScreenFormStyle());
 
     m_filteredPages.clear();
     m_instancePageCount = 0;
@@ -1162,7 +1132,7 @@ void BPSettingsOverlay::rebuild(BaseInstance* instance)
         m_globalContainer = new PageContainer(globalProvider, "", this);
         m_globalContainer->hidePageList();
         m_globalContainer->setBigPictureMode(true);
-        m_globalContainer->setStyleSheet(kBigScreenFormStyle);
+        m_globalContainer->setStyleSheet(bpBigScreenFormStyle());
         m_globalContainer->hide();
         for (auto* page : m_globalContainer->getPages()) {
             if (!page->shouldDisplay()) continue;

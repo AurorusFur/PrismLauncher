@@ -48,7 +48,9 @@
 
 #include "BaseInstance.h"
 #include "GamepadController.h"
+#include "ui/BPDialogHost.h"
 #include "ui/BPOptionsMenu.h"
+#include "ui/BPResourceBrowser.h"
 #include "ui/BPSettingsOverlay.h"
 #include "minecraft/auth/MinecraftAccount.h"
 #include "net/NetJob.h"
@@ -81,6 +83,7 @@ class MainWindow : public QMainWindow {
     bool eventFilter(QObject* obj, QEvent* ev) override;
     void closeEvent(QCloseEvent* event) override;
     void changeEvent(QEvent* event) override;
+    void resizeEvent(QResizeEvent* event) override;
 
     void checkInstancePathForProblems();
 
@@ -276,8 +279,13 @@ class MainWindow : public QMainWindow {
 
     // Big Picture state
     QLabel* m_bpHudLabel = nullptr;
+    QLabel* m_bpHeader = nullptr;  // title bar over the instance grid
+    static constexpr int BP_HEADER_H = 52;
     BPOptionsMenu* m_bpOptionsPanel = nullptr;      // instance action menu overlay
     BPSettingsOverlay* m_bpSettingsOverlay = nullptr;  // inline settings panel
+    BPDialogHost* m_bpDialogHost = nullptr;         // hosts QDialogs in-window (no extra windows)
+    BPResourceBrowser* m_bpResourceBrowser = nullptr;  // controller-native mod download manager
+    bool routeGamepadToDialog(Qt::Key key);         // modal or hosted dialog gets the key
 
     std::shared_ptr<Setting> instanceToolbarSetting = nullptr;
 

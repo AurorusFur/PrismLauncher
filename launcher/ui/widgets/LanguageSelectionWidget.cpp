@@ -46,6 +46,7 @@ LanguageSelectionWidget::LanguageSelectionWidget(QWidget* parent) : QWidget(pare
     languageView->header()->setSectionResizeMode(QHeaderView::ResizeToContents);
     languageView->header()->setSectionResizeMode(0, QHeaderView::Stretch);
     connect(languageView->selectionModel(), &QItemSelectionModel::currentRowChanged, this, &LanguageSelectionWidget::languageRowChanged);
+    connect(languageView, &QAbstractItemView::activated, this, &LanguageSelectionWidget::languageActivated);
     verticalLayout->setContentsMargins(0, 0, 0, 0);
 
     auto language_setting = APPLICATION->settings()->getSetting("Language");
@@ -71,8 +72,22 @@ void LanguageSelectionWidget::languageRowChanged(const QModelIndex& current, con
     if (current == previous) {
         return;
     }
+    // In Big Picture mode the D-pad moves the selection while *browsing*; applying
+    // on every row change would switch the app language mid-scroll. A (activated)
+    // applies instead.
+    if (APPLICATION->settings()->get("BigPictureMode").toBool()) {
+        return;
+    }
     auto translations = APPLICATION->translations();
     QString key = translations->data(current, Qt::UserRole).toString();
+    translations->selectLanguage(key);
+    translations->updateLanguage(key);
+}
+
+void LanguageSelectionWidget::languageActivated(const QModelIndex& index)
+{
+    auto translations = APPLICATION->translations();
+    QString key = translations->data(index, Qt::UserRole).toString();
     translations->selectLanguage(key);
     translations->updateLanguage(key);
 }

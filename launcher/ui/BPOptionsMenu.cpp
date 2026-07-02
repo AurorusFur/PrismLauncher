@@ -12,6 +12,7 @@
 
 #include "ui/BPHud.h"
 
+#include <QApplication>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QPainter>
@@ -19,29 +20,48 @@
 #include <QResizeEvent>
 #include <QShowEvent>
 
-static const QString STYLE_SELECTED =
-    "QPushButton {"
-    "  background-color: #3d7abf;"
-    "  color: white;"
-    "  font-size: 18px;"
-    "  font-weight: bold;"
-    "  border: 2px solid #5aadff;"
-    "  border-radius: 8px;"
-    "  text-align: left;"
-    "  padding-left: 20px;"
-    "}";
+// Palette-derived button styles so the menu matches the rest of the Big Picture
+// UI (settings overlay, dialog host) on any theme.
+static QString buttonStyleSelected()
+{
+    const QPalette& pal = QApplication::palette();
+    return QString(
+               "QPushButton {"
+               "  background-color: %1;"
+               "  color: %2;"
+               "  font-size: 18px;"
+               "  font-weight: bold;"
+               "  border: none;"
+               "  border-left: 4px solid %3;"
+               "  border-radius: 8px;"
+               "  text-align: left;"
+               "  padding-left: 20px;"
+               "}")
+        .arg(pal.color(QPalette::Highlight).name(), pal.color(QPalette::HighlightedText).name(),
+             pal.color(QPalette::Highlight).lighter(160).name());
+}
 
-static const QString STYLE_NORMAL =
-    "QPushButton {"
-    "  background-color: #0d1925;"
-    "  color: #8aa0b8;"
-    "  font-size: 18px;"
-    "  font-weight: normal;"
-    "  border: 1px solid #1e3048;"
-    "  border-radius: 8px;"
-    "  text-align: left;"
-    "  padding-left: 20px;"
-    "}";
+static QString buttonStyleNormal()
+{
+    const QPalette& pal = QApplication::palette();
+    const QColor text = pal.color(QPalette::WindowText);
+    const QColor window = pal.color(QPalette::Window);
+    // dimText: 70% WindowText + 30% Window — readable but clearly secondary
+    const QColor dimText((text.red() * 7 + window.red() * 3) / 10, (text.green() * 7 + window.green() * 3) / 10,
+                         (text.blue() * 7 + window.blue() * 3) / 10);
+    return QString(
+               "QPushButton {"
+               "  background-color: %1;"
+               "  color: %2;"
+               "  font-size: 18px;"
+               "  font-weight: normal;"
+               "  border: 1px solid %3;"
+               "  border-radius: 8px;"
+               "  text-align: left;"
+               "  padding-left: 20px;"
+               "}")
+        .arg(pal.color(QPalette::Base).name(), dimText.name(), pal.color(QPalette::Mid).name());
+}
 
 BPOptionsMenu::BPOptionsMenu(QWidget* parent) : QWidget(parent)
 {
@@ -49,14 +69,15 @@ BPOptionsMenu::BPOptionsMenu(QWidget* parent) : QWidget(parent)
     setAttribute(Qt::WA_NoSystemBackground, false);
     setFocusPolicy(Qt::StrongFocus);
 
+    const QPalette& pal = QApplication::palette();
+    const QColor base = pal.color(QPalette::Base);
+    const QColor mid = pal.color(QPalette::Mid);
+    const QColor text = pal.color(QPalette::WindowText);
+
     // Card container
     m_card = new QWidget(this);
     m_card->setStyleSheet(
-        "QWidget {"
-        "  background: #0a1420;"
-        "  border-radius: 14px;"
-        "  border: 1px solid #1e3858;"
-        "}");
+        QString("QWidget { background: %1; border-radius: 14px; border: 1px solid %2; }").arg(base.name(), mid.name()));
 
     m_title = new QLabel(this);  // parent = this so it doesn't clip inside card
     {
@@ -65,23 +86,23 @@ BPOptionsMenu::BPOptionsMenu(QWidget* parent) : QWidget(parent)
         f.setBold(true);
         m_title->setFont(f);
         m_title->setAlignment(Qt::AlignHCenter | Qt::AlignVCenter);
-        m_title->setStyleSheet("QLabel { color: #cce0ff; background: transparent; border: none; }");
+        m_title->setStyleSheet(QString("QLabel { color: %1; background: transparent; border: none; }").arg(text.name()));
     }
 
     // Divider
     auto* divider = new QWidget(m_card);
     divider->setFixedHeight(1);
-    divider->setStyleSheet("background: #1e3858;");
+    divider->setStyleSheet(QString("background: %1;").arg(mid.name()));
     m_card->setProperty("divider", QVariant::fromValue(static_cast<QObject*>(divider)));
 
     struct Entry { QString label; Action action; };
     const QList<Entry> entries = {
-        { tr("  ▶  Launch"),        Launch     },
-        { tr("  ⚙  Edit Settings"), Settings   },
-        { tr("  ✏  Rename"),        Rename     },
-        { tr("  ⎘  Copy"),          Copy       },
-        { tr("  🗑  Delete"),      Delete     },
-        { tr("  🎮  Change Icon"), ChangeIcon },
+        { tr("Launch"),        Launch     },
+        { tr("Edit Settings"), Settings   },
+        { tr("Rename"),        Rename     },
+        { tr("Copy"),          Copy       },
+        { tr("Delete"),        Delete     },
+        { tr("Change Icon"),   ChangeIcon },
     };
 
     for (const auto& e : entries) {
@@ -98,7 +119,8 @@ BPOptionsMenu::BPOptionsMenu(QWidget* parent) : QWidget(parent)
     auto* hint = new QLabel(bpHudHtml(tr("[↑↓] Navigate    [A] Select    [B] Cancel")), m_card);
     hint->setTextFormat(Qt::RichText);
     hint->setAlignment(Qt::AlignHCenter | Qt::AlignVCenter);
-    hint->setStyleSheet("QLabel { color: #506070; font-size: 13px; background: transparent; border: none; }");
+    hint->setStyleSheet(
+        QString("QLabel { color: %1; font-size: 13px; background: transparent; border: none; }").arg(text.name()));
     m_card->setProperty("hint", QVariant::fromValue(static_cast<QObject*>(hint)));
 
     hide();
@@ -168,15 +190,8 @@ void BPOptionsMenu::paintEvent(QPaintEvent*)
 {
     QPainter p(this);
     // Translucent scrim — keep the instance grid visible, dimmed, behind the card.
-    p.fillRect(rect(), QColor(4, 8, 16, 215));
-
-    const QRect cr = m_card ? m_card->geometry() : rect();
-    const int glow = 80;
-    QRect glowRect = cr.adjusted(-glow, -glow, glow, glow);
-    QRadialGradient rg(cr.center(), qMax(cr.width(), cr.height()) / 2.0 + glow);
-    rg.setColorAt(0.0, QColor(20, 50, 90, 60));
-    rg.setColorAt(1.0, QColor(0, 0, 0, 0));
-    p.fillRect(glowRect, rg);
+    // Same scrim as the settings overlay's modal cards and the dialog host.
+    p.fillRect(rect(), QColor(0, 0, 0, 170));
 }
 
 void BPOptionsMenu::keyPressEvent(QKeyEvent* event)
@@ -227,6 +242,8 @@ void BPOptionsMenu::dismiss()
 void BPOptionsMenu::setHighlight(int index)
 {
     m_current = index;
+    const QString selected = buttonStyleSelected();
+    const QString normal = buttonStyleNormal();
     for (int i = 0; i < m_buttons.size(); ++i)
-        m_buttons[i]->setStyleSheet(i == m_current ? STYLE_SELECTED : STYLE_NORMAL);
+        m_buttons[i]->setStyleSheet(i == m_current ? selected : normal);
 }

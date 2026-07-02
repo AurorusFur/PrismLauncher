@@ -55,6 +55,7 @@
 #include "Application.h"
 
 #include "ui/dialogs/CustomMessageBox.h"
+#include "ui/BPResourceBrowser.h"
 #include "ui/dialogs/ResourceDownloadDialog.h"
 #include "ui/dialogs/ResourceUpdateDialog.h"
 
@@ -171,6 +172,12 @@ void ModFolderPage::downloadMods()
         if (handleNoModLoader()) {
             return;
         }
+    }
+
+    // Big Picture mode: use the controller-native browser instead of the desktop dialog.
+    if (auto* browser = BPResourceBrowser::activeInstance()) {
+        browser->openForMods(m_instance, m_model);
+        return;
     }
 
     m_downloadDialog = new ResourceDownload::ModDownloadDialog(this, m_model, m_instance);

@@ -16,6 +16,7 @@
 #include "CustomMessageBox.h"
 
 #include <QAbstractButton>
+#include <QApplication>
 
 #include "IBigPicturePrompt.h"
 
@@ -33,6 +34,13 @@ class BPAwareMessageBox : public QMessageBox {
     {
         auto* prompt = IBigPicturePrompt::instance();
         if (!prompt)
+            return QMessageBox::exec();
+        // If another dialog is already up — a real modal window, or one hosted
+        // in-window by BPDialogHost — the overlay's prompt card would sit *behind*
+        // it and be unreachable, freezing the launcher. Fall back to a plain box:
+        // in Big Picture mode the dialog host picks it up as an in-window card on
+        // top, where the gamepad can drive it.
+        if (QApplication::activeModalWidget() || qApp->property("bpDialogHostActive").toBool())
             return QMessageBox::exec();
 
         // Standard buttons in ascending enum order (Ok, Yes, No, Abort, Cancel…)
