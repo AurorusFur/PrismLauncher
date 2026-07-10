@@ -17,7 +17,7 @@
 #include "modplatform/ModIndex.h"
 
 class BaseInstance;
-class ModFolderModel;
+class ResourceFolderModel;
 class QLabel;
 class QLineEdit;
 class QListView;
@@ -27,14 +27,15 @@ template <typename T>
 class shared_qobject_ptr;
 
 namespace ResourceDownload {
-class ModModel;
+class ResourceModel;
 }
 
-// Big Picture variant of the mod download manager: a controller-native,
-// full-screen browser that reuses the desktop downloader's backend (Modrinth
-// search model, version filters, download tasks) with couch-style presentation.
-// ModFolderPage::downloadMods() opens this instead of the desktop
-// ResourceDownloadDialog while Big Picture mode is active.
+// Big Picture variant of the resource download manager: a controller-native,
+// full-screen browser that reuses the desktop downloader's backend (search
+// models, version filters, download tasks) with couch-style presentation.
+// ModFolderPage::downloadMods() and ShaderPackPage::downloadShaderPack() open
+// this instead of the desktop ResourceDownloadDialog while Big Picture mode is
+// active.
 //
 // Controls: ↑↓ move through results (↑ from the top row jumps to search),
 // A opens the version picker / installs the highlighted version, X focuses the
@@ -47,7 +48,8 @@ public:
     explicit BPResourceBrowser(QWidget* parent);
     ~BPResourceBrowser() override;
 
-    void openForMods(BaseInstance* instance, ModFolderModel* mods);
+    void openForMods(BaseInstance* instance, ResourceFolderModel* mods);
+    void openForShaderPacks(BaseInstance* instance, ResourceFolderModel* packs);
     void closeBrowser();
 
     // Registered while Big Picture mode is active; pages use this to decide
@@ -75,7 +77,9 @@ protected:
 
 private:
     enum class Provider { Modrinth, CurseForge };
+    enum class ResourceKind { Mods, ShaderPacks };
 
+    void openInternal(ResourceKind kind, BaseInstance* instance, ResourceFolderModel* folder);
     void setupModel();  // (re)creates m_model for the current provider
     void onKeyboardCommitted();  // on-screen keyboard Done → run the search
     void onKeyboardClosed();     // keyboard closed → focus back on the results
@@ -95,19 +99,21 @@ private:
     static inline BPResourceBrowser* s_instance = nullptr;
 
     BaseInstance* m_instance = nullptr;
-    ModFolderModel* m_mods = nullptr;  // owned by the instance, outlives the browser session
-    ResourceDownload::ModModel* m_model = nullptr;  // points at one of the cached models below
+    ResourceFolderModel* m_targetFolder = nullptr;  // owned by the instance, outlives the browser session
+    ResourceDownload::ResourceModel* m_model = nullptr;  // points at one of the cached models below
     Provider m_provider = Provider::Modrinth;
+    ResourceKind m_kind = ResourceKind::Mods;
     bool m_curseForgeAvailable = false;  // API key present and loaders supported
 
-    // Models are kept per provider for the current instance so reopening the
-    // browser or toggling the provider shows previous results/icons instantly
-    // instead of re-running the search. Dropped when the instance changes; the
-    // id double-check guards against a new instance reusing the old address.
-    ResourceDownload::ModModel* m_modrinthModel = nullptr;
-    ResourceDownload::ModModel* m_flameModel = nullptr;
+    // Models are kept per provider for the current instance and resource kind so
+    // reopening the browser or toggling the provider shows previous results/icons
+    // instantly instead of re-running the search. Dropped when instance or kind
+    // changes; the id double-check guards against address reuse.
+    ResourceDownload::ResourceModel* m_modrinthModel = nullptr;
+    ResourceDownload::ResourceModel* m_flameModel = nullptr;
     BaseInstance* m_modelInstance = nullptr;
     QString m_modelInstanceId;
+    ResourceKind m_modelKind = ResourceKind::Mods;
 
     QString m_lastHudKey;  // skip QLabel rich-text relayout when the hint didn't change
 

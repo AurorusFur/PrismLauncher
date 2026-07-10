@@ -10,14 +10,29 @@
 
 #include "BPVirtualKeyboard.h"
 
+#include <QAbstractItemView>
 #include <QApplication>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QPlainTextEdit>
+#include <QTextEdit>
 
 #include "ui/BPAnim.h"
 #include "ui/BPHud.h"
+#include "ui/BPStyle.h"
+
+// Inline editors created by item views (rename-in-view) commit/cancel through
+// the delegate on Return/Escape rather than by just losing the keyboard.
+static bool isItemViewEditor(QWidget* w)
+{
+    for (QWidget* p = w ? w->parentWidget() : nullptr; p; p = p->parentWidget()) {
+        if (qobject_cast<QAbstractItemView*>(p))
+            return true;
+    }
+    return false;
+}
 
 BPVirtualKeyboard::BPVirtualKeyboard(QWidget* parent) : QWidget(parent)
 {
@@ -83,15 +98,22 @@ BPVirtualKeyboard::~BPVirtualKeyboard()
 
 // ── Lifecycle ─────────────────────────────────────────────────────────────────
 
-void BPVirtualKeyboard::openFor(QLineEdit* target)
+void BPVirtualKeyboard::openFor(QWidget* target)
 {
     if (!target)
         return;
     if (m_target && m_target != target)
         disconnect(m_target, nullptr, this, nullptr);
     m_target = target;
-    connect(target, &QLineEdit::textChanged, this, &BPVirtualKeyboard::updatePreview, Qt::UniqueConnection);
-    connect(target, &QLineEdit::cursorPositionChanged, this, &BPVirtualKeyboard::updatePreview, Qt::UniqueConnection);
+    // Live preview updates for the widget types that expose change signals.
+    if (auto* le = qobject_cast<QLineEdit*>(target)) {
+        connect(le, &QLineEdit::textChanged, this, &BPVirtualKeyboard::updatePreview, Qt::UniqueConnection);
+        connect(le, &QLineEdit::cursorPositionChanged, this, &BPVirtualKeyboard::updatePreview, Qt::UniqueConnection);
+    } else if (auto* te = qobject_cast<QTextEdit*>(target)) {
+        connect(te, &QTextEdit::textChanged, this, &BPVirtualKeyboard::updatePreview, Qt::UniqueConnection);
+    } else if (auto* pte = qobject_cast<QPlainTextEdit*>(target)) {
+        connect(pte, &QPlainTextEdit::textChanged, this, &BPVirtualKeyboard::updatePreview, Qt::UniqueConnection);
+    }
 
     m_shift = false;
     m_row = 1;  // home row: q
@@ -166,6 +188,16 @@ void BPVirtualKeyboard::navRight()
     update();
 }
 
+// Editing goes through synthetic key events rather than a QLineEdit-specific
+// API, so any focused text widget understands it.
+void BPVirtualKeyboard::sendText(const QString& text)
+{
+    if (!m_target)
+        return;
+    QCoreApplication::postEvent(m_target, new QKeyEvent(QEvent::KeyPress, 0, Qt::NoModifier, text));
+    QCoreApplication::postEvent(m_target, new QKeyEvent(QEvent::KeyRelease, 0, Qt::NoModifier, text));
+}
+
 void BPVirtualKeyboard::pressKey()
 {
     activate(m_rows[m_row][m_col]);
@@ -173,48 +205,52 @@ void BPVirtualKeyboard::pressKey()
 
 void BPVirtualKeyboard::cancel()
 {
+    // Cancel an inline rename instead of leaving the editor dangling.
+    if (m_target && isItemViewEditor(m_target))
+        bpPostKey(m_target, Qt::Key_Escape);
     closeKeyboard(false);
 }
 
 void BPVirtualKeyboard::backspace()
 {
     if (m_target)
-        m_target->backspace();
+        bpPostKey(m_target, Qt::Key_Backspace);
 }
 
 void BPVirtualKeyboard::space()
 {
-    if (m_target)
-        m_target->insert(QStringLiteral(" "));
+    sendText(QStringLiteral(" "));
 }
 
 void BPVirtualKeyboard::commit()
 {
+    // Commit an inline rename through the delegate. Only for single-line
+    // editors — Return would insert a newline in notes-style text edits.
+    if (m_target && qobject_cast<QLineEdit*>(m_target.data()) && isItemViewEditor(m_target))
+        bpPostKey(m_target, Qt::Key_Return);
     closeKeyboard(true);
 }
 
 void BPVirtualKeyboard::cursorLeft()
 {
     if (m_target)
-        m_target->cursorBackward(false);
+        bpPostKey(m_target, Qt::Key_Left);
 }
 
 void BPVirtualKeyboard::cursorRight()
 {
     if (m_target)
-        m_target->cursorForward(false);
+        bpPostKey(m_target, Qt::Key_Right);
 }
 
 void BPVirtualKeyboard::activate(const Key& key)
 {
     switch (key.type) {
         case Key::Char:
-            if (m_target) {
-                m_target->insert(m_shift ? key.upper : key.lower);
-                if (m_shift) {  // one-shot shift, like phone keyboards
-                    m_shift = false;
-                    update();
-                }
+            sendText(m_shift ? key.upper : key.lower);
+            if (m_shift) {  // one-shot shift, like phone keyboards
+                m_shift = false;
+                update();
             }
             break;
         case Key::Shift:
@@ -237,12 +273,19 @@ void BPVirtualKeyboard::activate(const Key& key)
 
 void BPVirtualKeyboard::updatePreview()
 {
-    if (!m_target) {
-        m_previewLabel->clear();
-        return;
+    QString text;
+    if (auto* le = qobject_cast<QLineEdit*>(m_target.data())) {
+        text = le->text();
+        text.insert(qBound(0, le->cursorPosition(), int(text.size())), QChar(u'|'));
+    } else if (auto* te = qobject_cast<QTextEdit*>(m_target.data())) {
+        text = te->toPlainText();
+    } else if (auto* pte = qobject_cast<QPlainTextEdit*>(m_target.data())) {
+        text = pte->toPlainText();
     }
-    QString text = m_target->text();
-    text.insert(qBound(0, m_target->cursorPosition(), int(text.size())), QChar(u'|'));
+    // Multi-line targets: a one-line preview only fits the tail being typed.
+    text.replace(QChar(u'\n'), QChar(u' '));
+    if (text.size() > 80)
+        text = QStringLiteral("…") + text.right(79);
     m_previewLabel->setText(text);
 }
 

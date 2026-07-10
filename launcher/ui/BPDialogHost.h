@@ -38,6 +38,16 @@ public:
     void hostDialog(QDialog* dialog);
     QDialog* activeDialog() const;  // topmost hosted dialog, or nullptr
 
+    // Gamepad actions — routed from MainWindow while a hosted dialog is open.
+    // Same two-level pattern as the settings overlay: ↑↓ move between fields
+    // (an item view counts as one field), A "enters" a list — then ↑↓ navigate
+    // its rows, A confirms, B goes back to field navigation. B otherwise closes
+    // the dialog.
+    void navUp();
+    void navDown();
+    void confirm();
+    void cancel();
+
     // The widget inside `root` that gamepad keys should go to: the currently
     // focused child if there is one, else the main item view, else the first
     // tab-focusable control, else `root` itself. Used for the hosted dialog's
@@ -58,8 +68,15 @@ private:
     void applyTheme();
     void focusDialogContent(QDialog* dialog);  // deferred initial focus
     void updateFocusRing();
+    void updateHud();
+    void navVertical(bool down);
+    void focusAdjacentField(bool forward);
+    QWidget* dialogFocusWidget() const;  // focused widget inside the top dialog, refocused if lost
 
     QList<QPointer<QDialog>> m_stack;
+
+    // Item view the user "entered" with A — its rows get native ↑↓ until B backs out.
+    QPointer<QWidget> m_enteredView;
 
     // Big Picture chrome around the hosted dialog
     QLabel* m_titleLabel = nullptr;

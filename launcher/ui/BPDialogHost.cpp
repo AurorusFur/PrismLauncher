@@ -10,9 +10,12 @@
 
 #include "BPDialogHost.h"
 
+#include <QAbstractButton>
 #include <QAbstractItemView>
 #include <QApplication>
+#include <QComboBox>
 #include <QDialog>
+#include <QGroupBox>
 #include <QLabel>
 #include <QPainter>
 #include <QResizeEvent>
@@ -20,6 +23,7 @@
 
 #include "ui/BPFocusRing.h"
 #include "ui/BPHud.h"
+#include "ui/BPNav.h"
 #include "ui/BPStyle.h"
 
 BPDialogHost::BPDialogHost(QWidget* parent) : QWidget(parent)
@@ -36,13 +40,12 @@ BPDialogHost::BPDialogHost(QWidget* parent) : QWidget(parent)
     m_hudLabel = new QLabel(this);
     m_hudLabel->setTextFormat(Qt::RichText);
     m_hudLabel->setAlignment(Qt::AlignCenter);
-    m_hudLabel->setText(
-        bpHudHtml(tr("[↑↓←→] Navigate    [A] Select    [X/Y] Next/Prev Field    [LB/RB] Scroll    [B] Close")));
     {
         QFont f = m_hudLabel->font();
         f.setPixelSize(13);
         m_hudLabel->setFont(f);
     }
+    updateHud();
 
     m_focusRing = new FocusRingWidget(this);
     // Same approach as the settings overlay: event-driven from focusChanged,
@@ -94,6 +97,8 @@ void BPDialogHost::hostDialog(QDialog* dialog)
     if (QDialog* below = activeDialog())
         below->hide();
     m_stack << dialog;
+    m_enteredView.clear();
+    updateHud();
 
     if (parentWidget())
         setGeometry(parentWidget()->rect());
@@ -186,6 +191,8 @@ void BPDialogHost::dialogClosed()
 void BPDialogHost::purge()
 {
     m_stack.removeAll(QPointer<QDialog>(nullptr));
+    m_enteredView.clear();
+    updateHud();
     if (QDialog* top = activeDialog()) {
         m_titleLabel->setText(top->windowTitle());
         layoutDialog(top);
@@ -199,15 +206,158 @@ void BPDialogHost::purge()
     }
 }
 
+// ── Gamepad navigation (mirrors the settings overlay's content mode) ─────────
+
+QWidget* BPDialogHost::dialogFocusWidget() const
+{
+    QDialog* top = activeDialog();
+    if (!top)
+        return nullptr;
+    QWidget* fw = QApplication::focusWidget();
+    if (fw && top->isAncestorOf(fw))
+        return fw;
+    fw = preferredFocusChild(top);
+    if (fw)
+        fw->setFocus(Qt::OtherFocusReason);
+    return fw;
+}
+
+void BPDialogHost::navUp()
+{
+    navVertical(false);
+}
+
+void BPDialogHost::navDown()
+{
+    navVertical(true);
+}
+
+void BPDialogHost::navVertical(bool down)
+{
+    const Qt::Key key = down ? Qt::Key_Down : Qt::Key_Up;
+    // Combo popup open — focus lives outside the dialog; drive the popup.
+    if (QApplication::activePopupWidget()) {
+        if (auto* fw = QApplication::focusWidget())
+            bpPostKey(fw, key);
+        return;
+    }
+    QWidget* fw = dialogFocusWidget();
+    if (!fw)
+        return;
+    // Inside an entered list, ↑↓ are row navigation; otherwise they move
+    // between fields (the list itself counts as a single field).
+    if (m_enteredView && fw == m_enteredView)
+        bpPostKey(fw, key);
+    else
+        focusAdjacentField(down);
+}
+
+void BPDialogHost::focusAdjacentField(bool forward)
+{
+    QDialog* top = activeDialog();
+    if (!top)
+        return;
+    const QList<QWidget*> order = bpOrderedControllerWidgets(top, top);
+    if (order.isEmpty())
+        return;
+    QWidget* fw = QApplication::focusWidget();
+    int idx = order.indexOf(fw);
+    if (idx < 0) {
+        order.first()->setFocus(Qt::OtherFocusReason);
+        return;
+    }
+    idx = (idx + (forward ? 1 : -1) + order.size()) % order.size();
+    order[idx]->setFocus(forward ? Qt::TabFocusReason : Qt::BacktabFocusReason);
+}
+
+void BPDialogHost::confirm()
+{
+    // A confirms the highlighted popup item.
+    if (QApplication::activePopupWidget()) {
+        if (auto* fw = QApplication::focusWidget())
+            bpPostKey(fw, Qt::Key_Return);
+        return;
+    }
+    QWidget* fw = dialogFocusWidget();
+    if (!fw)
+        return;
+    // Lists take two confirmations: the first A enters the list, the second
+    // activates the highlighted row (Return also triggers the dialog's default
+    // button, e.g. "Select" in version pickers).
+    if (auto* view = qobject_cast<QAbstractItemView*>(fw)) {
+        if (m_enteredView != view) {
+            m_enteredView = view;
+            bpEnsureCurrentRow(view);
+            updateHud();
+            return;
+        }
+        bpPostKey(view, Qt::Key_Return);
+        return;
+    }
+    // QAbstractButton/QComboBox/checkable QGroupBox only react to Key_Space.
+    auto* gb = qobject_cast<QGroupBox*>(fw);
+    const bool wantsSpace = qobject_cast<QAbstractButton*>(fw) || qobject_cast<QComboBox*>(fw) || (gb && gb->isCheckable());
+    bpPostKey(fw, wantsSpace ? Qt::Key_Space : Qt::Key_Return);
+}
+
+void BPDialogHost::cancel()
+{
+    // B closes an open combo popup and stays in the dialog.
+    if (QApplication::activePopupWidget()) {
+        if (auto* fw = QApplication::focusWidget())
+            bpPostKey(fw, Qt::Key_Escape);
+        return;
+    }
+    // B inside an entered list backs out to field navigation.
+    if (m_enteredView) {
+        m_enteredView.clear();
+        updateHud();
+        return;
+    }
+    if (QDialog* top = activeDialog())
+        bpPostKey(top, Qt::Key_Escape);  // reject/close
+}
+
+void BPDialogHost::updateHud()
+{
+    if (!m_hudLabel)
+        return;
+    if (m_enteredView)
+        m_hudLabel->setText(bpHudHtml(tr("[↑↓] Navigate    [A] Confirm    [LB/RB] Scroll    [B] Back to Fields")));
+    else
+        m_hudLabel->setText(bpHudHtml(tr("[↑↓] Switch Field    [A] Select / Enter List    [←→] Adjust    [B] Close")));
+}
+
 void BPDialogHost::updateFocusRing()
 {
     if (!m_focusRing)
         return;
-    if (!isVisible()) {
+    QDialog* top = activeDialog();
+    QWidget* fw = QApplication::focusWidget();
+    if (!isVisible() || !top || !fw || !top->isAncestorOf(fw)) {
         m_focusRing->hide();
         return;
     }
-    bpPositionFocusRing(m_focusRing, this, activeDialog());
+    // An *entered* list draws its own row highlight; a list that's merely the
+    // current field stop keeps the ring so the user can see where they are.
+    // (Focus may sit on the view itself or on its viewport via focus proxy.)
+    QWidget* logical = fw;
+    if (fw->parentWidget() && qobject_cast<QAbstractItemView*>(fw->parentWidget()))
+        logical = fw->parentWidget();
+    if (m_enteredView && logical == m_enteredView) {
+        m_focusRing->hide();
+        return;
+    }
+    QRect r(logical->mapTo(this, QPoint(0, 0)), logical->size());
+    r.adjust(-5, -5, 5, 5);
+    r &= top->geometry();
+    if (r.width() < 8 || r.height() < 8) {
+        m_focusRing->hide();
+        return;
+    }
+    m_focusRing->moveTo(r);
+    m_focusRing->show();
+    m_focusRing->raise();
 }
 
 void BPDialogHost::applyTheme()
@@ -272,5 +422,7 @@ void BPDialogHost::hideEvent(QHideEvent* ev)
         m_ringTimer->stop();
     if (m_focusRing)
         m_focusRing->hide();
+    m_enteredView.clear();
+    updateHud();
     QWidget::hideEvent(ev);
 }

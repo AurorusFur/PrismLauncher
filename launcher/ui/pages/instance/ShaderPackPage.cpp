@@ -42,6 +42,7 @@
 
 #include "minecraft/mod/ShaderPackFolderModel.h"
 
+#include "ui/BPResourceBrowser.h"
 #include "ui/dialogs/CustomMessageBox.h"
 #include "ui/dialogs/ProgressDialog.h"
 #include "ui/dialogs/ResourceDownloadDialog.h"
@@ -80,6 +81,12 @@ void ShaderPackPage::downloadShaderPack()
 {
     if (m_instance->typeName() != "Minecraft") {
         return;  // this is a null instance or a legacy instance
+    }
+
+    // Big Picture mode: use the controller-native browser instead of the desktop dialog.
+    if (auto* browser = BPResourceBrowser::activeInstance()) {
+        browser->openForShaderPacks(m_instance, m_model);
+        return;
     }
 
     m_downloadDialog = new ResourceDownload::ShaderPackDownloadDialog(this, m_model, m_instance);

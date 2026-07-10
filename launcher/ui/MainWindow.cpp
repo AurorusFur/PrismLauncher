@@ -92,6 +92,9 @@
 #include <updater/ExternalUpdater.h>
 #include "InstanceWindow.h"
 
+#include <QLineEdit>
+#include <QTimer>
+
 #include "ui/BPHud.h"
 #include "ui/BPStyle.h"
 #include "ui/BPOptionsMenu.h"
@@ -652,7 +655,16 @@ void MainWindow::applyBigPictureMode()
         m_bpHeader->setStyleSheet(
             QString("QLabel { background: %1; color: %2; border-bottom: 1px solid %3; padding-left: 20px; }")
                 .arg(base.name(), text.name(), mid.name()));
-        setContentsMargins(0, BP_HEADER_H, 0, 0);  // make room above the central area
+        // Push the instance grid below the header. QMainWindow ignores its own
+        // contentsMargins for layout purposes, so the margin has to go on the
+        // central widget's layout — otherwise the header covers the first group label.
+        if (!m_bpSavedCentralMarginsValid) {
+            m_bpSavedCentralMargins = ui->horizontalLayout->contentsMargins();
+            m_bpSavedCentralMarginsValid = true;
+        }
+        QMargins bpMargins = m_bpSavedCentralMargins;
+        bpMargins.setTop(bpMargins.top() + BP_HEADER_H);
+        ui->horizontalLayout->setContentsMargins(bpMargins);
         m_bpHeader->setGeometry(0, 0, width(), BP_HEADER_H);
         m_bpHeader->show();
         m_bpHeader->raise();
@@ -678,7 +690,10 @@ void MainWindow::applyBigPictureMode()
             delete m_bpHeader;
             m_bpHeader = nullptr;
         }
-        setContentsMargins(0, 0, 0, 0);
+        if (m_bpSavedCentralMarginsValid) {
+            ui->horizontalLayout->setContentsMargins(m_bpSavedCentralMargins);
+            m_bpSavedCentralMarginsValid = false;
+        }
     }
 
     if (m_listDelegate)
@@ -691,21 +706,26 @@ void MainWindow::applyBigPictureMode()
     if (bigPicture && !m_gamepad) {
         m_gamepad = new GamepadController(this);
 
-        // All navigation goes through routing slots that respect overlay state
-        connect(m_gamepad, &GamepadController::navigateLeft,         this, &MainWindow::onGamepadNavLeft);
-        connect(m_gamepad, &GamepadController::navigateRight,        this, &MainWindow::onGamepadNavRight);
-        connect(m_gamepad, &GamepadController::navigateUp,           this, &MainWindow::onGamepadNavUp);
-        connect(m_gamepad, &GamepadController::navigateDown,         this, &MainWindow::onGamepadNavDown);
-        connect(m_gamepad, &GamepadController::confirmPressed,       this, &MainWindow::onGamepadConfirm);
-        connect(m_gamepad, &GamepadController::cancelPressed,        this, &MainWindow::onGamepadCancel);
-        connect(m_gamepad, &GamepadController::optionsPressed,       this, &MainWindow::bpShowOptionsMenu);
-        connect(m_gamepad, &GamepadController::infoPressed,          this, &MainWindow::onGamepadInfo);
-        connect(m_gamepad, &GamepadController::shoulderLeftPressed,  this, &MainWindow::bpPrevGroup);
-        connect(m_gamepad, &GamepadController::shoulderRightPressed, this, &MainWindow::bpNextGroup);
-        connect(m_gamepad, &GamepadController::startPressed,         this, &MainWindow::onGamepadStart);
-        connect(m_gamepad, &GamepadController::triggerLeftPressed,   this, &MainWindow::onGamepadTriggerLeft);
-        connect(m_gamepad, &GamepadController::triggerRightPressed,  this, &MainWindow::onGamepadTriggerRight);
-        connect(m_gamepad, &GamepadController::guidePressed,         this, &MainWindow::onGamepadGuide);
+        // All navigation goes through routing slots that respect overlay state.
+        // Queued on purpose: several slots open dialogs that exec() a nested event
+        // loop. With direct connections that loop runs while GamepadController::
+        // poll() is still on the stack, so its timer can't re-fire — the pad goes
+        // dead inside the dialog and a started rumble never gets its expiry
+        // processed (it buzzes until the dialog closes).
+        connect(m_gamepad, &GamepadController::navigateLeft,         this, &MainWindow::onGamepadNavLeft,     Qt::QueuedConnection);
+        connect(m_gamepad, &GamepadController::navigateRight,        this, &MainWindow::onGamepadNavRight,    Qt::QueuedConnection);
+        connect(m_gamepad, &GamepadController::navigateUp,           this, &MainWindow::onGamepadNavUp,       Qt::QueuedConnection);
+        connect(m_gamepad, &GamepadController::navigateDown,         this, &MainWindow::onGamepadNavDown,     Qt::QueuedConnection);
+        connect(m_gamepad, &GamepadController::confirmPressed,       this, &MainWindow::onGamepadConfirm,     Qt::QueuedConnection);
+        connect(m_gamepad, &GamepadController::cancelPressed,        this, &MainWindow::onGamepadCancel,      Qt::QueuedConnection);
+        connect(m_gamepad, &GamepadController::optionsPressed,       this, &MainWindow::bpShowOptionsMenu,    Qt::QueuedConnection);
+        connect(m_gamepad, &GamepadController::infoPressed,          this, &MainWindow::onGamepadInfo,        Qt::QueuedConnection);
+        connect(m_gamepad, &GamepadController::shoulderLeftPressed,  this, &MainWindow::bpPrevGroup,          Qt::QueuedConnection);
+        connect(m_gamepad, &GamepadController::shoulderRightPressed, this, &MainWindow::bpNextGroup,          Qt::QueuedConnection);
+        connect(m_gamepad, &GamepadController::startPressed,         this, &MainWindow::onGamepadStart,       Qt::QueuedConnection);
+        connect(m_gamepad, &GamepadController::triggerLeftPressed,   this, &MainWindow::onGamepadTriggerLeft, Qt::QueuedConnection);
+        connect(m_gamepad, &GamepadController::triggerRightPressed,  this, &MainWindow::onGamepadTriggerRight,Qt::QueuedConnection);
+        connect(m_gamepad, &GamepadController::guidePressed,         this, &MainWindow::onGamepadGuide,       Qt::QueuedConnection);
         connect(m_gamepad, &GamepadController::connectionChanged,    this, &MainWindow::onGamepadConnectionChanged);
         // Console UIs don't show a mouse cursor while a pad is driving
         connect(m_gamepad, &GamepadController::activity, this, [this] { bpSetCursorHidden(true); });
@@ -902,7 +922,16 @@ void MainWindow::onBPOptionsAction(BPOptionsMenu::Action action)
     switch (action) {
         case BPOptionsMenu::Launch:     on_actionLaunchInstance_triggered(); break;
         case BPOptionsMenu::Settings:   on_actionEditInstance_triggered();   break;
-        case BPOptionsMenu::Rename:     on_actionRenameInstance_triggered(); break;
+        case BPOptionsMenu::Rename:
+            on_actionRenameInstance_triggered();
+            // Renaming happens in the view's inline editor, which only exists
+            // after the event loop spins — then give it the on-screen keyboard.
+            QTimer::singleShot(0, this, [this] {
+                auto* editor = qobject_cast<QLineEdit*>(QApplication::focusWidget());
+                if (editor && m_bpKeyboard && view->isAncestorOf(editor))
+                    m_bpKeyboard->openFor(editor);
+            });
+            break;
         case BPOptionsMenu::Copy:       on_actionCopyInstance_triggered();   break;
         case BPOptionsMenu::Delete:     on_actionDeleteInstance_triggered(); break;
         case BPOptionsMenu::ChangeIcon: on_actionChangeInstIcon_triggered(); break;
@@ -965,6 +994,7 @@ void MainWindow::onGamepadNavRight()
 void MainWindow::onGamepadNavUp()
 {
     if (m_bpKeyboard && m_bpKeyboard->isVisible()) { m_bpKeyboard->navUp(); return; }
+    if (m_bpDialogHost && m_bpDialogHost->isVisible() && !QApplication::activeModalWidget()) { m_bpDialogHost->navUp(); return; }
     if (routeGamepadToDialog(Qt::Key_Up)) return;
     if (m_bpResourceBrowser && m_bpResourceBrowser->isVisible()) {
         m_bpResourceBrowser->navUp();
@@ -984,6 +1014,7 @@ void MainWindow::onGamepadNavUp()
 void MainWindow::onGamepadNavDown()
 {
     if (m_bpKeyboard && m_bpKeyboard->isVisible()) { m_bpKeyboard->navDown(); return; }
+    if (m_bpDialogHost && m_bpDialogHost->isVisible() && !QApplication::activeModalWidget()) { m_bpDialogHost->navDown(); return; }
     if (routeGamepadToDialog(Qt::Key_Down)) return;
     if (m_bpResourceBrowser && m_bpResourceBrowser->isVisible()) {
         m_bpResourceBrowser->navDown();
@@ -1002,9 +1033,8 @@ void MainWindow::onGamepadNavDown()
 
 void MainWindow::onGamepadConfirm()
 {
-    if (m_gamepad)
-        m_gamepad->rumble(0x2800, 0x2800, 35);  // light tick on every confirm
     if (m_bpKeyboard && m_bpKeyboard->isVisible()) { m_bpKeyboard->pressKey(); return; }
+    if (m_bpDialogHost && m_bpDialogHost->isVisible() && !QApplication::activeModalWidget()) { m_bpDialogHost->confirm(); return; }
     if (routeGamepadToDialog(Qt::Key_Return)) return;
     if (m_bpResourceBrowser && m_bpResourceBrowser->isVisible()) {
         m_bpResourceBrowser->doConfirm();
@@ -1034,9 +1064,8 @@ void MainWindow::onGamepadConfirm()
 
 void MainWindow::onGamepadCancel()
 {
-    if (m_gamepad)
-        m_gamepad->rumble(0x1400, 0x1400, 25);
     if (m_bpKeyboard && m_bpKeyboard->isVisible()) { m_bpKeyboard->cancel(); return; }
+    if (m_bpDialogHost && m_bpDialogHost->isVisible() && !QApplication::activeModalWidget()) { m_bpDialogHost->cancel(); return; }
     if (routeGamepadToDialog(Qt::Key_Escape)) return;
     if (m_bpResourceBrowser && m_bpResourceBrowser->isVisible()) {
         m_bpResourceBrowser->doCancel();

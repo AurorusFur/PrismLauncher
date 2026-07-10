@@ -16,9 +16,7 @@
 #pragma once
 
 #include <QCache>
-#include <QHash>
 #include <QPainterPath>
-#include <QStaticText>
 #include <QStyledItemDelegate>
 
 class ListViewDelegate : public QStyledItemDelegate {
@@ -60,11 +58,8 @@ class ListViewDelegate : public QStyledItemDelegate {
 
     bool m_bigPicture = false;
 
-    // Paint caches for the Big Picture cards. Every selection move repaints all
-    // visible cards; laying out wrapped text and building clip paths per card per
-    // frame is the expensive part, and both depend only on values that rarely
-    // change (name text, card size).
-    mutable QHash<QString, QStaticText> m_bpNameCache;
+    // Paint cache for the Big Picture cards: all cards are the same size, so the
+    // rounded clip path is built once at the origin and the painter translated.
     mutable QPainterPath m_bpCardClip;
     mutable QSize m_bpCardClipSize;
 };

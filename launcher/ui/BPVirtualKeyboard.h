@@ -18,10 +18,11 @@ class QLabel;
 class QLineEdit;
 
 // On-screen keyboard for Big Picture mode: a bottom-sheet panel driven entirely
-// by the gamepad, so text entry (mod search, renaming, settings fields) never
-// requires a physical keyboard. Custom-painted key grid; the target QLineEdit
-// keeps focus and is edited through insert()/backspace(), so physical typing
-// keeps working alongside.
+// by the gamepad, so text entry (mod search, renaming, notes, settings fields)
+// never requires a physical keyboard. Custom-painted key grid; the target widget
+// keeps focus and is edited through synthetic key events, so it works with any
+// text widget (QLineEdit, QTextEdit, QPlainTextEdit, inline item-view editors)
+// and physical typing keeps working alongside.
 //
 // Controls (routed from MainWindow while visible, above everything else):
 // d-pad/left stick moves the key cursor, A types, X backspace, Y space,
@@ -33,10 +34,10 @@ public:
     explicit BPVirtualKeyboard(QWidget* parent);
     ~BPVirtualKeyboard() override;
 
-    void openFor(QLineEdit* target);
+    void openFor(QWidget* target);
     void dismissSilently();  // hide without emitting closed() — owner-driven teardown
     void reposition();       // stick to the bottom of the parent
-    QLineEdit* target() const { return m_target; }
+    QWidget* target() const { return m_target; }
 
     // Registered while Big Picture mode is active, same pattern as BPResourceBrowser.
     static BPVirtualKeyboard* activeInstance() { return s_instance; }
@@ -76,6 +77,7 @@ private:
 
     void activate(const Key& key);
     void closeKeyboard(bool commitText);
+    void sendText(const QString& text);  // synthetic key event carrying text
     void updatePreview();
     QRect gridRect() const;             // centered key block inside the panel
     QRect keyRect(int row, int col) const;
@@ -83,7 +85,7 @@ private:
 
     static inline BPVirtualKeyboard* s_instance = nullptr;
 
-    QPointer<QLineEdit> m_target;
+    QPointer<QWidget> m_target;
     QVector<QVector<Key>> m_rows;
     int m_row = 1;
     int m_col = 0;

@@ -34,6 +34,7 @@
 #include "ui/BPStyle.h"
 #include "ui/BPVirtualKeyboard.h"
 #include "ui/pages/modplatform/ModModel.h"
+#include "ui/pages/modplatform/ShaderPackModel.h"
 #include "ui/widgets/ModFilterWidget.h"
 #include "ui/widgets/ProjectItem.h"
 
@@ -140,23 +141,39 @@ BPResourceBrowser::~BPResourceBrowser()
 
 // ── Lifecycle ─────────────────────────────────────────────────────────────────
 
-void BPResourceBrowser::openForMods(BaseInstance* instance, ModFolderModel* mods)
+void BPResourceBrowser::openForMods(BaseInstance* instance, ResourceFolderModel* mods)
 {
-    // Reopening for the same instance keeps the previous provider, search term,
+    openInternal(ResourceKind::Mods, instance, mods);
+}
+
+void BPResourceBrowser::openForShaderPacks(BaseInstance* instance, ResourceFolderModel* packs)
+{
+    openInternal(ResourceKind::ShaderPacks, instance, packs);
+}
+
+void BPResourceBrowser::openInternal(ResourceKind kind, BaseInstance* instance, ResourceFolderModel* folder)
+{
+    // Reopening the same browse target keeps the previous provider, search term,
     // and results — they reappear instantly instead of re-running the search.
-    const bool sameInstance = instance && instance == m_modelInstance && instance->id() == m_modelInstanceId;
+    const bool sameTarget =
+        instance && instance == m_modelInstance && instance->id() == m_modelInstanceId && kind == m_modelKind;
     m_instance = instance;
-    m_mods = mods;
-    if (!sameInstance) {
+    m_targetFolder = folder;
+    m_kind = kind;
+    if (!sameTarget) {
         m_provider = Provider::Modrinth;
         m_search->clear();
     }
+    m_search->setPlaceholderText(m_kind == ResourceKind::ShaderPacks ? tr("Search for shader packs…")
+                                                                     : tr("Search for mods…"));
 
-    // CurseForge needs an API key at build time and loader support for this instance.
+    // CurseForge needs an API key at build time; mods additionally need loader support.
     m_curseForgeAvailable = (APPLICATION->capabilities() & Application::SupportsFlame);
-    if (auto* mcInstance = dynamic_cast<MinecraftInstance*>(instance)) {
-        if (auto loaders = mcInstance->getPackProfile()->getSupportedModLoaders(); loaders.has_value())
-            m_curseForgeAvailable = m_curseForgeAvailable && FlameAPI::validateModLoaders(loaders.value());
+    if (m_kind == ResourceKind::Mods) {
+        if (auto* mcInstance = dynamic_cast<MinecraftInstance*>(instance)) {
+            if (auto loaders = mcInstance->getPackProfile()->getSupportedModLoaders(); loaders.has_value())
+                m_curseForgeAvailable = m_curseForgeAvailable && FlameAPI::validateModLoaders(loaders.value());
+        }
     }
     if (!m_curseForgeAvailable && m_provider == Provider::CurseForge)
         m_provider = Provider::Modrinth;
@@ -173,15 +190,15 @@ void BPResourceBrowser::openForMods(BaseInstance* instance, ModFolderModel* mods
     m_results->setFocus();
     updateHud();
 
-    if (!sameInstance || m_model->rowCount(QModelIndex()) == 0)
+    if (!sameTarget || m_model->rowCount(QModelIndex()) == 0)
         m_model->search();  // initial, unfiltered search
 }
 
 void BPResourceBrowser::setupModel()
 {
-    // Models are cached per provider for one instance at a time (see header);
-    // drop them when the instance changed.
-    if (m_modelInstance != m_instance || m_modelInstanceId != m_instance->id()) {
+    // Models are cached per provider for one instance/kind at a time (see
+    // header); drop them when the browse target changed.
+    if (m_modelInstance != m_instance || m_modelInstanceId != m_instance->id() || m_modelKind != m_kind) {
         if (m_modrinthModel)
             m_modrinthModel->deleteLater();
         if (m_flameModel)
@@ -190,30 +207,39 @@ void BPResourceBrowser::setupModel()
         m_flameModel = nullptr;
         m_modelInstance = m_instance;
         m_modelInstanceId = m_instance->id();
+        m_modelKind = m_kind;
     }
 
     auto*& model = (m_provider == Provider::CurseForge) ? m_flameModel : m_modrinthModel;
     if (!model) {
-        if (m_provider == Provider::CurseForge)
-            model = new ResourceDownload::ModModel(*m_instance, new FlameAPI(), QStringLiteral("Flame"),
-                                                   QStringLiteral("FlameMods"));
-        else
-            model = new ResourceDownload::ModModel(*m_instance, new ModrinthAPI(), QStringLiteral("Modrinth"),
-                                                   QStringLiteral("ModrinthPacks"));
-        model->setParent(this);
+        const bool flame = (m_provider == Provider::CurseForge);
+        if (m_kind == ResourceKind::ShaderPacks) {
+            model = flame ? new ResourceDownload::ShaderPackResourceModel(*m_instance, new FlameAPI(), QStringLiteral("Flame"),
+                                                                          QStringLiteral("FlameShaderPacks"))
+                          : new ResourceDownload::ShaderPackResourceModel(*m_instance, new ModrinthAPI(),
+                                                                          QStringLiteral("Modrinth"),
+                                                                          QStringLiteral("ModrinthShaderPacks"));
+        } else {
+            auto* modModel = flame ? new ResourceDownload::ModModel(*m_instance, new FlameAPI(), QStringLiteral("Flame"),
+                                                                    QStringLiteral("FlameMods"))
+                                   : new ResourceDownload::ModModel(*m_instance, new ModrinthAPI(), QStringLiteral("Modrinth"),
+                                                                    QStringLiteral("ModrinthPacks"));
 
-        // Default filter: this instance's Minecraft version and loaders (the model
-        // falls back to the instance profile's loaders when none are set here).
-        auto filter = std::make_shared<ModFilterWidget::Filter>();
-        filter->hideInstalled = false;
-        filter->openSource = false;
-        filter->side = ModPlatform::Side::NoSide;
-        if (auto* mcInstance = dynamic_cast<MinecraftInstance*>(m_instance)) {
-            const QString mcVersion = mcInstance->getPackProfile()->getComponentVersion("net.minecraft");
-            if (!mcVersion.isEmpty())
-                filter->versions.emplace_back(mcVersion);
+            // Default filter: this instance's Minecraft version and loaders (the model
+            // falls back to the instance profile's loaders when none are set here).
+            auto filter = std::make_shared<ModFilterWidget::Filter>();
+            filter->hideInstalled = false;
+            filter->openSource = false;
+            filter->side = ModPlatform::Side::NoSide;
+            if (auto* mcInstance = dynamic_cast<MinecraftInstance*>(m_instance)) {
+                const QString mcVersion = mcInstance->getPackProfile()->getComponentVersion("net.minecraft");
+                if (!mcVersion.isEmpty())
+                    filter->versions.emplace_back(mcVersion);
+            }
+            modModel->setFilter(filter);
+            model = modModel;
         }
-        model->setFilter(filter);
+        model->setParent(this);
 
         // Both cached models stay connected — ignore signals from the one that
         // isn't current (e.g. a version list that finished loading after a toggle).
@@ -252,9 +278,7 @@ void BPResourceBrowser::toggleProvider()
     }
     m_provider = (m_provider == Provider::Modrinth) ? Provider::CurseForge : Provider::Modrinth;
     setupModel();
-    m_model->setSearchTerm(m_search->text().trimmed());
-    m_model->search();
-    setStatus(QString());
+    runSearch();
     updateHud();
 }
 
@@ -262,7 +286,9 @@ void BPResourceBrowser::updateTitle()
 {
     const QString provider = (m_provider == Provider::CurseForge) ? tr("CurseForge") : tr("Modrinth");
     if (m_instance)
-        m_titleLabel->setText(m_instance->name() + QStringLiteral("  ›  ") + tr("Download Mods — %1").arg(provider));
+        m_titleLabel->setText(m_instance->name() + QStringLiteral("  ›  ") +
+                              (m_kind == ResourceKind::ShaderPacks ? tr("Download Shader Packs — %1").arg(provider)
+                                                                   : tr("Download Mods — %1").arg(provider)));
 }
 
 void BPResourceBrowser::closeBrowser()
@@ -381,7 +407,12 @@ void BPResourceBrowser::runSearch()
 {
     if (!m_model)
         return;
-    m_model->searchWithTerm(m_search->text().trimmed(), 0, false);
+    // searchWithTerm isn't part of the ResourceModel interface — dispatch by kind.
+    const QString term = m_search->text().trimmed();
+    if (m_kind == ResourceKind::ShaderPacks)
+        static_cast<ResourceDownload::ShaderPackResourceModel*>(m_model)->searchWithTerm(term, 0);
+    else
+        static_cast<ResourceDownload::ModModel*>(m_model)->searchWithTerm(term, 0, false);
     setStatus(QString());
 }
 
@@ -476,7 +507,7 @@ void BPResourceBrowser::installVersion(int versionRow)
     const auto version = m_cardVersions.at(versionRow);
     hideVersionCard();
 
-    auto task = makeShared<ResourceDownloadTask>(pack, version, m_mods);
+    auto task = makeShared<ResourceDownloadTask>(pack, version, m_targetFolder);
     setStatus(tr("Downloading %1…").arg(pack->name));
     connect(task.get(), &Task::succeeded, this, [this, pack] { setStatus(tr("Installed %1").arg(pack->name)); });
     connect(task.get(), &Task::failed, this,

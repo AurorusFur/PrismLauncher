@@ -836,6 +836,7 @@ SET(LAUNCHER_SOURCES
     ui/BPDialogHost.cpp
     ui/BPFocusRing.h
     ui/BPHud.h
+    ui/BPNav.h
     ui/BPStyle.h
     ui/BPOptionsMenu.h
     ui/BPOptionsMenu.cpp

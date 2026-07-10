@@ -292,6 +292,8 @@ class MainWindow : public QMainWindow {
     BPResourceBrowser* m_bpResourceBrowser = nullptr;  // controller-native mod download manager
     BPVirtualKeyboard* m_bpKeyboard = nullptr;      // on-screen keyboard for text fields
     bool m_bpCursorHidden = false;                  // cursor auto-hides while the gamepad drives
+    QMargins m_bpSavedCentralMargins;               // central layout margins to restore on exit
+    bool m_bpSavedCentralMarginsValid = false;
     bool routeGamepadToDialog(Qt::Key key);         // modal or hosted dialog gets the key
     void bpSetCursorHidden(bool hidden);
 

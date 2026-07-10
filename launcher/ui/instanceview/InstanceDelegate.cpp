@@ -75,7 +75,6 @@ void ListViewDelegate::setBigPictureMode(bool enabled)
 {
     m_bigPicture = enabled;
     if (!enabled) {
-        m_bpNameCache.clear();
         m_bpCardClip.clear();
         m_bpCardClipSize = QSize();
     }
@@ -255,32 +254,18 @@ void ListViewDelegate::paintBigPicture(QPainter* painter, const QStyleOptionView
     painter->restore();
 
     // ── Text ──
+    // One elided line, like console tiles: long names get "…" instead of
+    // wrapping upward over the icon. Also far cheaper than laying out wrapped
+    // text for every card on every repaint.
     QFont labelFont = opt.font;
     labelFont.setPointSize(labelFont.pointSize() + 1);
     labelFont.setBold(selected);
     painter->setFont(labelFont);
     painter->setPen(selected ? Qt::white : QColor(200, 210, 220));
 
-    // Laying out wrapped text is the expensive part of this paint; QStaticText
-    // caches the layout per name (bold variant separately — it wraps differently).
-    QRect textRect = textBarRect.adjusted(8, 4, -8, -4);
-    const QString cacheKey = opt.text + QLatin1String(selected ? "#s" : "#n");
-    if (m_bpNameCache.size() > 256)
-        m_bpNameCache.clear();  // renamed/removed instances would slowly pile up
-    QStaticText& staticText = m_bpNameCache[cacheKey];
-    if (staticText.text() != opt.text || staticText.textWidth() != textRect.width()) {
-        staticText.setTextFormat(Qt::PlainText);
-        QTextOption textOption;
-        textOption.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
-        textOption.setAlignment(Qt::AlignHCenter);
-        staticText.setTextOption(textOption);
-        staticText.setTextWidth(textRect.width());
-        staticText.setText(opt.text);
-        staticText.prepare(QTransform(), labelFont);
-    }
-    const QSizeF textSize = staticText.size();
-    const QPointF textPos(textRect.x(), textRect.y() + (textRect.height() - textSize.height()) / 2.0);
-    painter->drawStaticText(textPos, staticText);
+    const QRect textRect = textBarRect.adjusted(8, 4, -8, -4);
+    const QString elided = QFontMetrics(labelFont).elidedText(opt.text, Qt::ElideRight, textRect.width());
+    painter->drawText(textRect, Qt::AlignHCenter | Qt::AlignVCenter, elided);
 
     // ── Badges and progress ──
     auto* instance = (BaseInstance*)index.data(InstanceList::InstancePointerRole).value<void*>();

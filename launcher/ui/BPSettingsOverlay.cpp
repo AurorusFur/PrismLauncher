@@ -50,6 +50,7 @@
 #include "ui/BPAnim.h"
 #include "ui/BPFocusRing.h"
 #include "ui/BPHud.h"
+#include "ui/BPNav.h"
 #include "ui/BPStyle.h"
 #include "ui/BPVirtualKeyboard.h"
 #include "ui/pages/BasePage.h"
@@ -59,7 +60,6 @@ static const QSet<QString> kHiddenPageIds = { "coremods", "nilmods" };
 
 // Forward-declare helpers used inside the constructor lambda.
 static bool isPopupOpen();
-static bool isControllerFocusable(QWidget* w, QWidget* container);
 
 // ── Constructor / destructor ──────────────────────────────────────────────────
 
@@ -143,7 +143,7 @@ BPSettingsOverlay::BPSettingsOverlay(QWidget* parent) : QWidget(parent)
         // when Qt or page code lands focus there — move on to the next real control.
         if (m_mode == Mode::Content) {
             auto* c = currentContainer();
-            if (c && c->isAncestorOf(now) && now != c && !isControllerFocusable(now, c)) {
+            if (c && c->isAncestorOf(now) && now != c && !bpControllerFocusable(now, c)) {
                 focusNextInContent(true);
                 return;
             }
@@ -262,25 +262,6 @@ static bool isFormWidget(QWidget* w)
     return w && !qobject_cast<QAbstractItemView*>(w);
 }
 
-// Returns true if a controller user can meaningfully focus this widget.
-// Filters out everything Qt's raw tab chain would visit but a D-pad can't use:
-// labels, tab bars (LB/RB switch tabs), plain scroll frames, internal helper
-// widgets, and anything invisible. Text fields stay focusable — they use the
-// same explicit edit mode as spinboxes (A to edit, A/B to finish).
-static bool isControllerFocusable(QWidget* w, QWidget* container)
-{
-    if (!w || !container || !container->isAncestorOf(w)) return false;
-    if (!w->isVisibleTo(container) || !w->isEnabled()) return false;
-    if (!(w->focusPolicy() & Qt::TabFocus)) return false;
-    if (w->focusProxy()) return false;  // spinbox/combo internal line edits, scroll areas
-    if (qobject_cast<QLabel*>(w)) return false;
-    if (qobject_cast<QTabBar*>(w)) return false;
-    if (auto* sa = qobject_cast<QAbstractScrollArea*>(w);
-        sa && !qobject_cast<QAbstractItemView*>(w) && !qobject_cast<QTextEdit*>(w) && !qobject_cast<QPlainTextEdit*>(w))
-        return false;  // plain QScrollArea frames — focus belongs to their contents
-    return true;
-}
-
 // Widgets whose native Up/Down/typing behavior is gated behind explicit edit
 // mode (A to enter, A/B to leave) so focus traversal can't change their value
 // and the user can't get stuck inside them.
@@ -340,17 +321,7 @@ QList<QWidget*> BPSettingsOverlay::orderedContentWidgets() const
     if (page == m_orderCachePage && m_orderCacheTime.isValid() && m_orderCacheTime.elapsed() < 100)
         return m_orderCache;
 
-    QList<QWidget*> list;
-    for (auto* w : page->findChildren<QWidget*>())
-        if (isControllerFocusable(w, c))
-            list << w;
-    std::stable_sort(list.begin(), list.end(), [page](QWidget* a, QWidget* b) {
-        const QPoint pa = a->mapTo(page, QPoint(0, 0));
-        const QPoint pb = b->mapTo(page, QPoint(0, 0));
-        if (qAbs(pa.y() - pb.y()) > 8)  // same-row tolerance
-            return pa.y() < pb.y();
-        return pa.x() < pb.x();
-    });
+    const QList<QWidget*> list = bpOrderedControllerWidgets(page, c);
 
     m_orderCachePage = page;
     m_orderCache = list;
@@ -457,6 +428,12 @@ void BPSettingsOverlay::navLeft()
         if (auto* w = contentFocusWidget()) {
             if (auto* rb = qobject_cast<QRadioButton*>(w))
                 cycleRadioButton(rb, -1);
+            // Item views own ↑↓ for row navigation, which traps focus on pages
+            // that pair the list with form fields (Servers: address/name edits).
+            // ←→ is meaningless in that flat list — use it to reach the fields.
+            // Other pages keep native ←→ (screenshot grid, tree expansion).
+            else if (qobject_cast<QAbstractItemView*>(w) && currentPageCategory() == PageCategory::Servers)
+                focusNextInContent(false);
             else
                 bpPostKey(w, Qt::Key_Left);
         }
@@ -474,6 +451,8 @@ void BPSettingsOverlay::navRight()
             if (auto* w = contentFocusWidget()) {
                 if (auto* rb = qobject_cast<QRadioButton*>(w))
                     cycleRadioButton(rb, +1);
+                else if (qobject_cast<QAbstractItemView*>(w) && currentPageCategory() == PageCategory::Servers)
+                    focusNextInContent(true);  // see navLeft
                 else
                     bpPostKey(w, Qt::Key_Right);
             }
@@ -1403,12 +1382,12 @@ void BPSettingsOverlay::enterValueEdit(QWidget* w)
         m_focusRing->setProperty("editing", true);
         m_focusRing->update();
     }
-    // Text fields get the on-screen keyboard; spinboxes keep plain ↑↓ adjustment.
-    if (auto* le = qobject_cast<QLineEdit*>(w)) {
+    // Text widgets get the on-screen keyboard; spinboxes keep plain ↑↓ adjustment.
+    if (qobject_cast<QLineEdit*>(w) || qobject_cast<QTextEdit*>(w) || qobject_cast<QPlainTextEdit*>(w)) {
         if (auto* kb = BPVirtualKeyboard::activeInstance()) {
             connect(kb, &BPVirtualKeyboard::closed, this, &BPSettingsOverlay::onKeyboardClosed,
                     Qt::UniqueConnection);
-            kb->openFor(le);
+            kb->openFor(w);
         }
     }
     updateHud();
@@ -1646,6 +1625,9 @@ void BPSettingsOverlay::focusPageContent()
     for (auto* view : page->findChildren<QAbstractItemView*>()) {
         if (view->isVisibleTo(page) && view->isEnabled()) {
             view->setFocus(Qt::OtherFocusReason);
+            // Land on a row too — with no current row, row-dependent actions
+            // (remove, edit…) stay disabled, which strands single-entry lists.
+            bpEnsureCurrentRow(view);
             return;
         }
     }
