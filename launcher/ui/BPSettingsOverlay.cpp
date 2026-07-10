@@ -47,9 +47,11 @@
 #include "Application.h"
 #include "BaseInstance.h"
 #include "InstancePageProvider.h"
+#include "ui/BPAnim.h"
 #include "ui/BPFocusRing.h"
 #include "ui/BPHud.h"
 #include "ui/BPStyle.h"
+#include "ui/BPVirtualKeyboard.h"
 #include "ui/pages/BasePage.h"
 #include "ui/widgets/PageContainer.h"
 
@@ -108,10 +110,11 @@ BPSettingsOverlay::BPSettingsOverlay(QWidget* parent) : QWidget(parent)
     buildHelpWidget();
 
     m_focusRing = new FocusRingWidget(this);
-    // Focus can move via scrolling, model resets, or async page updates — none of which
-    // emit a signal we can hook uniformly. A short poll keeps the ring glued in place.
+    // The ring is repositioned event-driven from focusChanged below; this slow
+    // poll is only a fallback for moves with no signal to hook (scrolling under
+    // a fixed focus widget, model resets, async page updates).
     m_ringTimer = new QTimer(this);
-    m_ringTimer->setInterval(40);
+    m_ringTimer->setInterval(200);
     connect(m_ringTimer, &QTimer::timeout, this, &BPSettingsOverlay::updateFocusRing);
 
     applyTheme();
@@ -119,6 +122,7 @@ BPSettingsOverlay::BPSettingsOverlay(QWidget* parent) : QWidget(parent)
 
     // Update HUD and handle special focus transitions in Content mode.
     connect(qApp, &QApplication::focusChanged, this, [this](QWidget*, QWidget* now) {
+        updateFocusRing();  // event-driven; cheap early-outs when hidden/irrelevant
         // Value-edit mode is bound to one widget; any focus move ends it.
         if (m_editWidget && now != m_editWidget)
             leaveValueEdit();
@@ -166,14 +170,17 @@ void BPSettingsOverlay::open(BaseInstance* instance)
         setGeometry(0, 0, parentWidget()->width(), parentWidget()->height());
     show();
     raise();
-    setMode(Mode::TabBar);  // after show() so setFocus() takes effect
-    m_ringTimer->start();
+    bpSlideIn(this);
+    setMode(Mode::TabBar);  // after show() so setFocus() takes effect; also arms the ring timer
     IBigPicturePrompt::setInstance(this);
 }
 
 void BPSettingsOverlay::closeOverlay()
 {
     IBigPicturePrompt::setInstance(nullptr);
+    // Take the on-screen keyboard down with us if it's editing one of our fields.
+    if (auto* kb = BPVirtualKeyboard::activeInstance(); kb && kb->isVisible() && kb->target() && isAncestorOf(kb->target()))
+        kb->dismissSilently();
     if (m_ringTimer) m_ringTimer->stop();
     if (m_focusRing) m_focusRing->hide();
     if (m_promptLoop) {
@@ -238,18 +245,13 @@ bool BPSettingsOverlay::cycleInnerTab(int delta)
     if (!tabs) return false;
     const int n = tabs->count();
     tabs->setCurrentIndex((tabs->currentIndex() + delta + n) % n);
+    m_orderCachePage = nullptr;  // visible widget set changed within the same page
     focusPageContent();  // land on the first control of the newly shown tab
     updateHud();
     return true;
 }
 
 // ── Directional navigation ────────────────────────────────────────────────────
-
-static void postKey(QWidget* target, Qt::Key key)
-{
-    QCoreApplication::postEvent(target, new QKeyEvent(QEvent::KeyPress,   key, Qt::NoModifier));
-    QCoreApplication::postEvent(target, new QKeyEvent(QEvent::KeyRelease, key, Qt::NoModifier));
-}
 
 // Returns true for "form" widgets where D-pad Up/Down should move focus to the
 // prev/next widget rather than scroll or change a value. Only item views keep
@@ -325,11 +327,20 @@ static void cycleRadioButton(QRadioButton* rb, int delta)
 // disorienting with a D-pad — so navigation is driven by geometry instead.
 QList<QWidget*> BPSettingsOverlay::orderedContentWidgets() const
 {
-    QList<QWidget*> list;
     auto* c = currentContainer();
-    if (!c) return list;
+    if (!c) return {};
     auto* page = dynamic_cast<QWidget*>(c->selectedPage());
-    if (!page) return list;
+    if (!page) return {};
+
+    // Burst cache: a single navigation event calls this two or three times (the
+    // nav slot, then the focusChanged auto-skip). findChildren over a whole
+    // settings page plus a geometry sort per keypress adds up under held
+    // auto-repeat. 100 ms is long enough to cover one event burst and too short
+    // for the page's widget set to change under the user.
+    if (page == m_orderCachePage && m_orderCacheTime.isValid() && m_orderCacheTime.elapsed() < 100)
+        return m_orderCache;
+
+    QList<QWidget*> list;
     for (auto* w : page->findChildren<QWidget*>())
         if (isControllerFocusable(w, c))
             list << w;
@@ -340,6 +351,10 @@ QList<QWidget*> BPSettingsOverlay::orderedContentWidgets() const
             return pa.y() < pb.y();
         return pa.x() < pb.x();
     });
+
+    m_orderCachePage = page;
+    m_orderCache = list;
+    m_orderCacheTime.start();
     return list;
 }
 
@@ -397,7 +412,7 @@ void BPSettingsOverlay::navUp()
         case Mode::TabBar:     sidebarNavUp(); break;
         case Mode::Content: {
             if (isPopupOpen()) {
-                if (auto* fw = QApplication::focusWidget()) postKey(fw, Qt::Key_Up);
+                if (auto* fw = QApplication::focusWidget()) bpPostKey(fw, Qt::Key_Up);
                 break;
             }
             auto* w = contentFocusWidget();
@@ -405,11 +420,11 @@ void BPSettingsOverlay::navUp()
             if (w != m_editWidget && isFormWidget(w))
                 focusNextInContent(false);
             else
-                postKey(w, Qt::Key_Up);
+                bpPostKey(w, Qt::Key_Up);
             break;
         }
-        case Mode::ActionMenu: postKey(m_actionList, Qt::Key_Up); break;
-        case Mode::PromptCard: postKey(m_promptList, Qt::Key_Up); break;
+        case Mode::ActionMenu: bpPostKey(m_actionList, Qt::Key_Up); break;
+        case Mode::PromptCard: bpPostKey(m_promptList, Qt::Key_Up); break;
     }
 }
 
@@ -419,7 +434,7 @@ void BPSettingsOverlay::navDown()
         case Mode::TabBar:     sidebarNavDown(); break;
         case Mode::Content: {
             if (isPopupOpen()) {
-                if (auto* fw = QApplication::focusWidget()) postKey(fw, Qt::Key_Down);
+                if (auto* fw = QApplication::focusWidget()) bpPostKey(fw, Qt::Key_Down);
                 break;
             }
             auto* w = contentFocusWidget();
@@ -427,11 +442,11 @@ void BPSettingsOverlay::navDown()
             if (w != m_editWidget && isFormWidget(w))
                 focusNextInContent(true);
             else
-                postKey(w, Qt::Key_Down);
+                bpPostKey(w, Qt::Key_Down);
             break;
         }
-        case Mode::ActionMenu: postKey(m_actionList, Qt::Key_Down); break;
-        case Mode::PromptCard: postKey(m_promptList, Qt::Key_Down); break;
+        case Mode::ActionMenu: bpPostKey(m_actionList, Qt::Key_Down); break;
+        case Mode::PromptCard: bpPostKey(m_promptList, Qt::Key_Down); break;
     }
 }
 
@@ -443,7 +458,7 @@ void BPSettingsOverlay::navLeft()
             if (auto* rb = qobject_cast<QRadioButton*>(w))
                 cycleRadioButton(rb, -1);
             else
-                postKey(w, Qt::Key_Left);
+                bpPostKey(w, Qt::Key_Left);
         }
     }
     // TabBar: nothing (sidebar is the leftmost element)
@@ -460,7 +475,7 @@ void BPSettingsOverlay::navRight()
                 if (auto* rb = qobject_cast<QRadioButton*>(w))
                     cycleRadioButton(rb, +1);
                 else
-                    postKey(w, Qt::Key_Right);
+                    bpPostKey(w, Qt::Key_Right);
             }
             break;
         case Mode::ActionMenu: break;  // ignore
@@ -480,7 +495,7 @@ void BPSettingsOverlay::exitToTabBar()
     // The user presses B again to return to the tab bar.
     if (isPopupOpen()) {
         if (auto* fw = QApplication::focusWidget())
-            postKey(fw, Qt::Key_Escape);
+            bpPostKey(fw, Qt::Key_Escape);
         return;
     }
     // B while editing a value: leave edit mode, stay on the field.
@@ -499,7 +514,7 @@ void BPSettingsOverlay::doConfirm()
     // When a combo popup is open, A confirms the highlighted item.
     if (isPopupOpen()) {
         if (auto* fw = QApplication::focusWidget())
-            postKey(fw, Qt::Key_Return);
+            bpPostKey(fw, Qt::Key_Return);
         return;
     }
     QWidget* fw = QApplication::focusWidget();
@@ -551,8 +566,7 @@ void BPSettingsOverlay::doConfirm()
         key = Qt::Key_Space;
     else
         key = Qt::Key_Return;
-    QCoreApplication::postEvent(fw, new QKeyEvent(QEvent::KeyPress,   key, Qt::NoModifier));
-    QCoreApplication::postEvent(fw, new QKeyEvent(QEvent::KeyRelease, key, Qt::NoModifier));
+    bpPostKey(fw, key);
 }
 
 void BPSettingsOverlay::doTabKey()
@@ -564,8 +578,7 @@ void BPSettingsOverlay::sendKeyToFocused(Qt::Key key)
 {
     QWidget* fw = QApplication::focusWidget();
     if (!fw || !isAncestorOf(fw)) fw = this;
-    QCoreApplication::postEvent(fw, new QKeyEvent(QEvent::KeyPress,   key, Qt::NoModifier));
-    QCoreApplication::postEvent(fw, new QKeyEvent(QEvent::KeyRelease, key, Qt::NoModifier));
+    bpPostKey(fw, key);
 }
 
 void BPSettingsOverlay::triggerPrimaryAction()
@@ -738,6 +751,7 @@ void BPSettingsOverlay::showActionMenu()
     m_modalScrim->raise();
     m_actionCard->show();
     m_actionCard->raise();
+    bpPopIn(m_actionCard);
     m_actionList->setFocus();
     setMode(Mode::ActionMenu);
 }
@@ -761,6 +775,7 @@ void BPSettingsOverlay::dismissActionMenu()
     m_mode = Mode::Content;
     focusPageContent();
     updateHud();
+    updateRingTimer();
 }
 
 // ── Prompt card (IBigPicturePrompt) ──────────────────────────────────────────
@@ -871,11 +886,13 @@ int BPSettingsOverlay::execPrompt(const QString& title, const QString& msg, cons
     m_modalScrim->raise();
     m_promptCard->show();
     m_promptCard->raise();
+    bpPopIn(m_promptCard);
     m_promptList->setFocus();
 
     const Mode prevMode = m_mode;
     m_mode = Mode::PromptCard;
     updateHud();
+    updateRingTimer();
 
     // Save/restore any outer prompt loop so a nested prompt can't orphan it
     // (an orphaned loop never quits and freezes the launcher).
@@ -895,6 +912,7 @@ int BPSettingsOverlay::execPrompt(const QString& title, const QString& msg, cons
     }
     m_mode = prevMode;
     updateHud();
+    updateRingTimer();
 
     return m_promptResult;
 }
@@ -947,7 +965,20 @@ QString BPSettingsOverlay::helpHtml() const
         "<tr><td><b>[X]</b></td><td>Open instance options menu</td></tr>"
         "<tr><td><b>[Y]</b></td><td>Open instance settings</td></tr>"
         "<tr><td><b>[LB / RB]</b></td><td>Switch group</td></tr>"
-        "<tr><td><b>[↑↓←→]</b></td><td>Navigate instances</td></tr>"
+        "<tr><td><b>[↑↓←→]</b></td><td>Navigate instances (right stick: fast scroll)</td></tr>"
+        "<tr><td><b>[LT / RT]</b></td><td>Page up / down in lists</td></tr>"
+        "<tr><td><b>[Guide]</b></td><td>Return to the instance grid from anywhere</td></tr>"
+        "</table>"
+
+        "<h3>On-Screen Keyboard (text fields, mod search)</h3>"
+        "<table cellspacing='6'>"
+        "<tr><td><b>[↑↓←→]</b></td><td>Move between keys</td></tr>"
+        "<tr><td><b>[A]</b></td><td>Type the highlighted key</td></tr>"
+        "<tr><td><b>[X]</b></td><td>Backspace</td></tr>"
+        "<tr><td><b>[Y]</b></td><td>Space</td></tr>"
+        "<tr><td><b>[LB / RB]</b></td><td>Move the text cursor</td></tr>"
+        "<tr><td><b>[Start]</b></td><td>Done (confirm / search)</td></tr>"
+        "<tr><td><b>[B]</b></td><td>Close keyboard</td></tr>"
         "</table>"
 
         "<h3>Settings – Page List (sidebar)</h3>"
@@ -997,6 +1028,7 @@ void BPSettingsOverlay::showHelp(bool show)
         switchContainerForPage(m_currentTab);
     }
     updateHud();
+    updateRingTimer();
 }
 
 // ── Page category helpers ─────────────────────────────────────────────────────
@@ -1300,6 +1332,8 @@ void BPSettingsOverlay::teardown()
     m_currentTab  = 0;
     m_helpShowing = false;
     m_editWidget.clear();
+    m_orderCache.clear();
+    m_orderCachePage = nullptr;
     if (m_actionCard) m_actionCard->hide();
     if (m_promptCard) m_promptCard->hide();
     if (m_helpWidget) m_helpWidget->hide();
@@ -1347,7 +1381,19 @@ void BPSettingsOverlay::setMode(Mode m)
     else if (m == Mode::Content)
         focusPageContent();
     updateHud();
+    updateRingTimer();
     updateFocusRing();
+}
+
+// The fallback poll only needs to run while the ring can actually show —
+// Content mode with a page (not help) on screen.
+void BPSettingsOverlay::updateRingTimer()
+{
+    const bool want = isVisible() && m_mode == Mode::Content && !m_helpShowing;
+    if (want && !m_ringTimer->isActive())
+        m_ringTimer->start();
+    else if (!want && m_ringTimer->isActive())
+        m_ringTimer->stop();
 }
 
 void BPSettingsOverlay::enterValueEdit(QWidget* w)
@@ -1356,6 +1402,14 @@ void BPSettingsOverlay::enterValueEdit(QWidget* w)
     if (m_focusRing) {
         m_focusRing->setProperty("editing", true);
         m_focusRing->update();
+    }
+    // Text fields get the on-screen keyboard; spinboxes keep plain ↑↓ adjustment.
+    if (auto* le = qobject_cast<QLineEdit*>(w)) {
+        if (auto* kb = BPVirtualKeyboard::activeInstance()) {
+            connect(kb, &BPVirtualKeyboard::closed, this, &BPSettingsOverlay::onKeyboardClosed,
+                    Qt::UniqueConnection);
+            kb->openFor(le);
+        }
     }
     updateHud();
 }
@@ -1367,7 +1421,22 @@ void BPSettingsOverlay::leaveValueEdit()
         m_focusRing->setProperty("editing", false);
         m_focusRing->update();
     }
+    // Focus moved away (or edit mode ended some other way) — the keyboard's
+    // target field is stale, close it. Silent: closed() would re-enter here.
+    if (auto* kb = BPVirtualKeyboard::activeInstance(); kb && kb->isVisible() && kb->target() && isAncestorOf(kb->target()))
+        kb->dismissSilently();
     updateHud();
+}
+
+void BPSettingsOverlay::onKeyboardClosed()
+{
+    if (m_editWidget)
+        leaveValueEdit();
+}
+
+void BPSettingsOverlay::pageScroll(bool up)
+{
+    sendKeyToFocused(up ? Qt::Key_PageUp : Qt::Key_PageDown);
 }
 
 void BPSettingsOverlay::updateFocusRing()
@@ -1377,30 +1446,7 @@ void BPSettingsOverlay::updateFocusRing()
         m_focusRing->hide();
         return;
     }
-    auto* c = currentContainer();
-    QWidget* fw = QApplication::focusWidget();
-    if (!fw || !c || !c->isAncestorOf(fw)) {
-        m_focusRing->hide();
-        return;
-    }
-    // Item views draw their own row highlight — no ring around the whole frame.
-    // (Focus may sit on the view itself or on its viewport via focus proxy.)
-    if (qobject_cast<QAbstractItemView*>(fw) ||
-        (fw->parentWidget() && qobject_cast<QAbstractItemView*>(fw->parentWidget()))) {
-        m_focusRing->hide();
-        return;
-    }
-    QRect r(fw->mapTo(this, QPoint(0, 0)), fw->size());
-    r.adjust(-5, -5, 5, 5);
-    r &= c->geometry();  // don't spill over the sidebar, title, or HUD
-    if (r.width() < 8 || r.height() < 8) {
-        m_focusRing->hide();
-        return;
-    }
-    if (m_focusRing->geometry() != r)
-        m_focusRing->setGeometry(r);
-    m_focusRing->show();
-    m_focusRing->raise();
+    bpPositionFocusRing(m_focusRing, this, currentContainer());
 }
 
 void BPSettingsOverlay::updateHud()
@@ -1417,7 +1463,7 @@ void BPSettingsOverlay::updateHud()
         if (qobject_cast<QAbstractSpinBox*>(m_editWidget.data()))
             hint = tr("[↑↓] Adjust Value    [A/B] Done");
         else
-            hint = tr("Editing — type with a keyboard    [←→] Move Cursor    [A/B] Done");
+            hint = tr("Editing — use the on-screen keyboard    [Start] Done    [B] Close");
     } else {
         switch (currentPageCategory()) {
             case PageCategory::ExternalResource:
@@ -1451,6 +1497,12 @@ void BPSettingsOverlay::updateHud()
                 break;
         }
     }
+    // This runs on every focus change; skip the regex/HTML/relayout work when
+    // nothing changed. Key includes the glyph style so pad hotswaps re-render.
+    const QString key = QString::number(int(bpGlyphStyle())) + hint;
+    if (key == m_lastHudKey)
+        return;
+    m_lastHudKey = key;
     m_hudLabel->setText(bpHudHtml(hint));
 }
 
@@ -1467,12 +1519,7 @@ void BPSettingsOverlay::applyTheme()
     m_titleLabel->setStyleSheet(
         QString("QLabel { color: %1; background: transparent; }").arg(text.name()));
 
-    // dimText: 70% WindowText + 30% Window — readable but clearly secondary
-    const QColor dimText(
-        (text.red()   * 7 + window.red()   * 3) / 10,
-        (text.green() * 7 + window.green() * 3) / 10,
-        (text.blue()  * 7 + window.blue()  * 3) / 10
-    );
+    const QColor dimText = bpDimText(pal);
     m_sidebar->setStyleSheet(
         QString(
             "QListWidget { background: %1; border: none; outline: none; }"

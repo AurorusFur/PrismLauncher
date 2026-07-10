@@ -50,6 +50,7 @@ private:
 
     QString m_instanceName;
     int m_current = 0;
+    int m_scrimAlpha = 170;  // animated 0→170 on show
 
     QWidget* m_card = nullptr;
     QLabel* m_title = nullptr;

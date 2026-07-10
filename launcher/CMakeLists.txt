@@ -831,6 +831,7 @@ SET(LAUNCHER_SOURCES
 
     # GUI - windows
     IBigPicturePrompt.h
+    ui/BPAnim.h
     ui/BPDialogHost.h
     ui/BPDialogHost.cpp
     ui/BPFocusRing.h
@@ -842,6 +843,8 @@ SET(LAUNCHER_SOURCES
     ui/BPResourceBrowser.cpp
     ui/BPSettingsOverlay.h
     ui/BPSettingsOverlay.cpp
+    ui/BPVirtualKeyboard.h
+    ui/BPVirtualKeyboard.cpp
     ui/GuiUtil.h
     ui/GuiUtil.cpp
     ui/MainWindow.h

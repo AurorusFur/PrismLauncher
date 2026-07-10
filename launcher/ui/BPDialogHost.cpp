@@ -45,11 +45,16 @@ BPDialogHost::BPDialogHost(QWidget* parent) : QWidget(parent)
     }
 
     m_focusRing = new FocusRingWidget(this);
-    // Same approach as the settings overlay: focus can move via clicks, model
-    // resets, or async updates — a short poll keeps the ring glued in place.
+    // Same approach as the settings overlay: event-driven from focusChanged,
+    // with a slow fallback poll for moves that emit no signal (scrolling under
+    // a fixed focus widget, model resets, async updates).
     m_ringTimer = new QTimer(this);
-    m_ringTimer->setInterval(40);
+    m_ringTimer->setInterval(200);
     connect(m_ringTimer, &QTimer::timeout, this, &BPDialogHost::updateFocusRing);
+    connect(qApp, &QApplication::focusChanged, this, [this] {
+        if (isVisible())
+            updateFocusRing();
+    });
 
     applyTheme();
     hide();
@@ -198,29 +203,11 @@ void BPDialogHost::updateFocusRing()
 {
     if (!m_focusRing)
         return;
-    QDialog* top = activeDialog();
-    QWidget* fw = QApplication::focusWidget();
-    if (!isVisible() || !top || !fw || !top->isAncestorOf(fw)) {
+    if (!isVisible()) {
         m_focusRing->hide();
         return;
     }
-    // Item views draw their own row highlight — no ring around the whole frame.
-    if (qobject_cast<QAbstractItemView*>(fw) ||
-        (fw->parentWidget() && qobject_cast<QAbstractItemView*>(fw->parentWidget()))) {
-        m_focusRing->hide();
-        return;
-    }
-    QRect r(fw->mapTo(this, QPoint(0, 0)), fw->size());
-    r.adjust(-5, -5, 5, 5);
-    r &= top->geometry();
-    if (r.width() < 8 || r.height() < 8) {
-        m_focusRing->hide();
-        return;
-    }
-    if (m_focusRing->geometry() != r)
-        m_focusRing->setGeometry(r);
-    m_focusRing->show();
-    m_focusRing->raise();
+    bpPositionFocusRing(m_focusRing, this, activeDialog());
 }
 
 void BPDialogHost::applyTheme()

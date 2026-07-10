@@ -52,6 +52,7 @@
 #include "ui/BPOptionsMenu.h"
 #include "ui/BPResourceBrowser.h"
 #include "ui/BPSettingsOverlay.h"
+#include "ui/BPVirtualKeyboard.h"
 #include "minecraft/auth/MinecraftAccount.h"
 #include "net/NetJob.h"
 #include "ui/instanceview/InstanceDelegate.h"
@@ -235,6 +236,10 @@ class MainWindow : public QMainWindow {
     void onGamepadConfirm();
     void onGamepadCancel();
     void onGamepadInfo();
+    void onGamepadTriggerLeft();
+    void onGamepadTriggerRight();
+    void onGamepadGuide();
+    void onGamepadConnectionChanged();
 
     // Big Picture group navigation and overlay
     void bpPrevGroup();
@@ -285,7 +290,10 @@ class MainWindow : public QMainWindow {
     BPSettingsOverlay* m_bpSettingsOverlay = nullptr;  // inline settings panel
     BPDialogHost* m_bpDialogHost = nullptr;         // hosts QDialogs in-window (no extra windows)
     BPResourceBrowser* m_bpResourceBrowser = nullptr;  // controller-native mod download manager
+    BPVirtualKeyboard* m_bpKeyboard = nullptr;      // on-screen keyboard for text fields
+    bool m_bpCursorHidden = false;                  // cursor auto-hides while the gamepad drives
     bool routeGamepadToDialog(Qt::Key key);         // modal or hosted dialog gets the key
+    void bpSetCursorHidden(bool hidden);
 
     std::shared_ptr<Setting> instanceToolbarSetting = nullptr;
 

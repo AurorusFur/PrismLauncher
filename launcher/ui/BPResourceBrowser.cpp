@@ -29,8 +29,10 @@
 #include "minecraft/mod/ModFolderModel.h"
 #include "modplatform/flame/FlameAPI.h"
 #include "modplatform/modrinth/ModrinthAPI.h"
+#include "ui/BPAnim.h"
 #include "ui/BPHud.h"
 #include "ui/BPStyle.h"
+#include "ui/BPVirtualKeyboard.h"
 #include "ui/pages/modplatform/ModModel.h"
 #include "ui/widgets/ModFilterWidget.h"
 #include "ui/widgets/ProjectItem.h"
@@ -140,9 +142,15 @@ BPResourceBrowser::~BPResourceBrowser()
 
 void BPResourceBrowser::openForMods(BaseInstance* instance, ModFolderModel* mods)
 {
+    // Reopening for the same instance keeps the previous provider, search term,
+    // and results — they reappear instantly instead of re-running the search.
+    const bool sameInstance = instance && instance == m_modelInstance && instance->id() == m_modelInstanceId;
     m_instance = instance;
     m_mods = mods;
-    m_provider = Provider::Modrinth;
+    if (!sameInstance) {
+        m_provider = Provider::Modrinth;
+        m_search->clear();
+    }
 
     // CurseForge needs an API key at build time and loader support for this instance.
     m_curseForgeAvailable = (APPLICATION->capabilities() & Application::SupportsFlame);
@@ -150,8 +158,9 @@ void BPResourceBrowser::openForMods(BaseInstance* instance, ModFolderModel* mods
         if (auto loaders = mcInstance->getPackProfile()->getSupportedModLoaders(); loaders.has_value())
             m_curseForgeAvailable = m_curseForgeAvailable && FlameAPI::validateModLoaders(loaders.value());
     }
+    if (!m_curseForgeAvailable && m_provider == Provider::CurseForge)
+        m_provider = Provider::Modrinth;
 
-    m_search->clear();
     setStatus(QString());
     hideVersionCard();
     setupModel();
@@ -160,51 +169,75 @@ void BPResourceBrowser::openForMods(BaseInstance* instance, ModFolderModel* mods
         setGeometry(parentWidget()->rect());
     show();
     raise();
+    bpSlideIn(this);
     m_results->setFocus();
     updateHud();
 
-    m_model->search();  // initial, unfiltered search
+    if (!sameInstance || m_model->rowCount(QModelIndex()) == 0)
+        m_model->search();  // initial, unfiltered search
 }
 
 void BPResourceBrowser::setupModel()
 {
-    // Fresh model per instance/provider — search state, icons, and filters are per-instance.
-    if (m_model)
-        m_model->deleteLater();
-    if (m_provider == Provider::CurseForge)
-        m_model = new ResourceDownload::ModModel(*m_instance, new FlameAPI(), QStringLiteral("Flame"), QStringLiteral("FlameMods"));
-    else
-        m_model = new ResourceDownload::ModModel(*m_instance, new ModrinthAPI(), QStringLiteral("Modrinth"),
-                                                 QStringLiteral("ModrinthPacks"));
-    m_model->setParent(this);
-
-    // Default filter: this instance's Minecraft version and loaders (the model
-    // falls back to the instance profile's loaders when none are set here).
-    auto filter = std::make_shared<ModFilterWidget::Filter>();
-    filter->hideInstalled = false;
-    filter->openSource = false;
-    filter->side = ModPlatform::Side::NoSide;
-    if (auto* mcInstance = dynamic_cast<MinecraftInstance*>(m_instance)) {
-        const QString mcVersion = mcInstance->getPackProfile()->getComponentVersion("net.minecraft");
-        if (!mcVersion.isEmpty())
-            filter->versions.emplace_back(mcVersion);
+    // Models are cached per provider for one instance at a time (see header);
+    // drop them when the instance changed.
+    if (m_modelInstance != m_instance || m_modelInstanceId != m_instance->id()) {
+        if (m_modrinthModel)
+            m_modrinthModel->deleteLater();
+        if (m_flameModel)
+            m_flameModel->deleteLater();
+        m_modrinthModel = nullptr;
+        m_flameModel = nullptr;
+        m_modelInstance = m_instance;
+        m_modelInstanceId = m_instance->id();
     }
-    m_model->setFilter(filter);
 
-    m_results->setModel(m_model);
-    connect(m_model, &ResourceDownload::ResourceModel::versionListUpdated, this, [this](const QModelIndex& index) {
-        if (index.isValid() && index.row() == m_pendingVersionRow) {
-            m_pendingVersionRow = -1;
-            setStatus(QString());
-            showVersionCard(index.row());
+    auto*& model = (m_provider == Provider::CurseForge) ? m_flameModel : m_modrinthModel;
+    if (!model) {
+        if (m_provider == Provider::CurseForge)
+            model = new ResourceDownload::ModModel(*m_instance, new FlameAPI(), QStringLiteral("Flame"),
+                                                   QStringLiteral("FlameMods"));
+        else
+            model = new ResourceDownload::ModModel(*m_instance, new ModrinthAPI(), QStringLiteral("Modrinth"),
+                                                   QStringLiteral("ModrinthPacks"));
+        model->setParent(this);
+
+        // Default filter: this instance's Minecraft version and loaders (the model
+        // falls back to the instance profile's loaders when none are set here).
+        auto filter = std::make_shared<ModFilterWidget::Filter>();
+        filter->hideInstalled = false;
+        filter->openSource = false;
+        filter->side = ModPlatform::Side::NoSide;
+        if (auto* mcInstance = dynamic_cast<MinecraftInstance*>(m_instance)) {
+            const QString mcVersion = mcInstance->getPackProfile()->getComponentVersion("net.minecraft");
+            if (!mcVersion.isEmpty())
+                filter->versions.emplace_back(mcVersion);
         }
-    });
-    // Land the selection on the first result of a fresh search.
-    connect(m_model, &QAbstractItemModel::rowsInserted, this, [this] {
-        if (!m_results->currentIndex().isValid() && m_model->rowCount(QModelIndex()) > 0)
-            m_results->setCurrentIndex(m_model->index(0, 0));
-    });
+        model->setFilter(filter);
 
+        // Both cached models stay connected — ignore signals from the one that
+        // isn't current (e.g. a version list that finished loading after a toggle).
+        connect(model, &ResourceDownload::ResourceModel::versionListUpdated, this,
+                [this, model](const QModelIndex& index) {
+                    if (m_model != model)
+                        return;
+                    if (index.isValid() && index.row() == m_pendingVersionRow) {
+                        m_pendingVersionRow = -1;
+                        setStatus(QString());
+                        showVersionCard(index.row());
+                    }
+                });
+        // Land the selection on the first result of a fresh search.
+        connect(model, &QAbstractItemModel::rowsInserted, this, [this, model] {
+            if (m_model != model)
+                return;
+            if (!m_results->currentIndex().isValid() && m_model->rowCount(QModelIndex()) > 0)
+                m_results->setCurrentIndex(m_model->index(0, 0));
+        });
+    }
+
+    m_model = model;
+    m_results->setModel(m_model);
     m_pendingVersionRow = -1;
     updateTitle();
 }
@@ -234,6 +267,8 @@ void BPResourceBrowser::updateTitle()
 
 void BPResourceBrowser::closeBrowser()
 {
+    if (auto* kb = BPVirtualKeyboard::activeInstance(); kb && kb->isVisible() && kb->target() == m_search)
+        kb->dismissSilently();
     hideVersionCard();
     hide();
     emit browserClosing();
@@ -241,16 +276,10 @@ void BPResourceBrowser::closeBrowser()
 
 // ── Gamepad actions ───────────────────────────────────────────────────────────
 
-static void postKey(QWidget* target, Qt::Key key)
-{
-    QCoreApplication::postEvent(target, new QKeyEvent(QEvent::KeyPress, key, Qt::NoModifier));
-    QCoreApplication::postEvent(target, new QKeyEvent(QEvent::KeyRelease, key, Qt::NoModifier));
-}
-
 void BPResourceBrowser::navUp()
 {
     if (m_versionCard->isVisible()) {
-        postKey(m_versionList, Qt::Key_Up);
+        bpPostKey(m_versionList, Qt::Key_Up);
         return;
     }
     if (m_search->hasFocus())
@@ -265,7 +294,7 @@ void BPResourceBrowser::navUp()
 void BPResourceBrowser::navDown()
 {
     if (m_versionCard->isVisible()) {
-        postKey(m_versionList, Qt::Key_Down);
+        bpPostKey(m_versionList, Qt::Key_Down);
         return;
     }
     if (m_search->hasFocus()) {
@@ -310,7 +339,27 @@ void BPResourceBrowser::focusSearch()
     if (m_versionCard->isVisible())
         return;
     m_search->setFocus(Qt::OtherFocusReason);
-    m_search->selectAll();
+    m_search->selectAll();  // fresh typing replaces the old term
+    if (auto* kb = BPVirtualKeyboard::activeInstance()) {
+        connect(kb, &BPVirtualKeyboard::committed, this, &BPResourceBrowser::onKeyboardCommitted, Qt::UniqueConnection);
+        connect(kb, &BPVirtualKeyboard::closed, this, &BPResourceBrowser::onKeyboardClosed, Qt::UniqueConnection);
+        kb->openFor(m_search);
+    }
+    updateHud();
+}
+
+void BPResourceBrowser::onKeyboardCommitted()
+{
+    if (!isVisible() || !m_search->hasFocus())
+        return;  // the keyboard was serving someone else
+    runSearch();
+}
+
+void BPResourceBrowser::onKeyboardClosed()
+{
+    if (!isVisible() || !m_search->hasFocus())
+        return;
+    m_results->setFocus();
     updateHud();
 }
 
@@ -404,6 +453,7 @@ void BPResourceBrowser::showVersionCard(int row)
     positionVersionCard();
     m_versionCard->show();
     m_versionCard->raise();
+    bpPopIn(m_versionCard);
     m_versionList->setFocus();
     updateHud();
 }
@@ -451,11 +501,17 @@ void BPResourceBrowser::updateHud()
     if (m_versionCard->isVisible())
         hint = tr("[↑↓] Version    [A] Install    [B] Back");
     else if (m_search->hasFocus())
-        hint = tr("Type with a keyboard    [A] Search    [↓/B] Back to Results");
+        hint = tr("[A] Type    [Start] Search    [B] Back to Results");
     else if (m_curseForgeAvailable)
         hint = tr("[↑↓] Navigate    [A] Versions    [X] Search    [Y] Source    [LB/RB] Page    [B] Close");
     else
         hint = tr("[↑↓] Navigate    [A] Versions    [X] Search    [LB/RB] Page    [B] Close");
+    // Called on every focus/selection change — skip the regex/HTML/relayout work
+    // when nothing changed. Key includes the glyph style so pad hotswaps re-render.
+    const QString key = QString::number(int(bpGlyphStyle())) + hint;
+    if (key == m_lastHudKey)
+        return;
+    m_lastHudKey = key;
     m_hudLabel->setText(bpHudHtml(hint));
 }
 

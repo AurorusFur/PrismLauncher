@@ -93,6 +93,7 @@
 #include "InstanceWindow.h"
 
 #include "ui/BPHud.h"
+#include "ui/BPStyle.h"
 #include "ui/BPOptionsMenu.h"
 #include "ui/GuiUtil.h"
 #include "ui/ViewLogWindow.h"
@@ -608,7 +609,7 @@ void MainWindow::applyBigPictureMode()
     bool bigPicture = APPLICATION->settings()->get("BigPictureMode").toBool();
 
     if (bigPicture) {
-        showMaximized();
+        showFullScreen();  // true console feel — no taskbar, no title bar
         // Hide all chrome — only the instance grid should show
         ui->mainToolBar->hide();
         ui->instanceToolBar->hide();
@@ -656,6 +657,9 @@ void MainWindow::applyBigPictureMode()
         m_bpHeader->show();
         m_bpHeader->raise();
     } else {
+        if (isFullScreen())
+            showMaximized();
+        bpSetCursorHidden(false);
         // Restore toolbar visibility
         ui->mainToolBar->show();
         ui->instanceToolBar->show();
@@ -699,6 +703,13 @@ void MainWindow::applyBigPictureMode()
         connect(m_gamepad, &GamepadController::shoulderLeftPressed,  this, &MainWindow::bpPrevGroup);
         connect(m_gamepad, &GamepadController::shoulderRightPressed, this, &MainWindow::bpNextGroup);
         connect(m_gamepad, &GamepadController::startPressed,         this, &MainWindow::onGamepadStart);
+        connect(m_gamepad, &GamepadController::triggerLeftPressed,   this, &MainWindow::onGamepadTriggerLeft);
+        connect(m_gamepad, &GamepadController::triggerRightPressed,  this, &MainWindow::onGamepadTriggerRight);
+        connect(m_gamepad, &GamepadController::guidePressed,         this, &MainWindow::onGamepadGuide);
+        connect(m_gamepad, &GamepadController::connectionChanged,    this, &MainWindow::onGamepadConnectionChanged);
+        // Console UIs don't show a mouse cursor while a pad is driving
+        connect(m_gamepad, &GamepadController::activity, this, [this] { bpSetCursorHidden(true); });
+        onGamepadConnectionChanged();  // pick up a pad opened before the connects above
 
     } else if (!bigPicture && m_gamepad) {
         delete m_gamepad;
@@ -746,6 +757,46 @@ void MainWindow::applyBigPictureMode()
         delete m_bpResourceBrowser;
         m_bpResourceBrowser = nullptr;
     }
+
+    // On-screen keyboard; text-entry surfaces find it via activeInstance().
+    // While it's visible, all gamepad input routes to it (see the routing slots).
+    if (bigPicture && !m_bpKeyboard) {
+        m_bpKeyboard = new BPVirtualKeyboard(this);
+        BPVirtualKeyboard::setActiveInstance(m_bpKeyboard);
+    } else if (!bigPicture && m_bpKeyboard) {
+        BPVirtualKeyboard::setActiveInstance(nullptr);
+        delete m_bpKeyboard;
+        m_bpKeyboard = nullptr;
+    }
+}
+
+void MainWindow::bpSetCursorHidden(bool hidden)
+{
+    if (hidden == m_bpCursorHidden)
+        return;
+    m_bpCursorHidden = hidden;
+    if (hidden)
+        QApplication::setOverrideCursor(Qt::BlankCursor);
+    else
+        QApplication::restoreOverrideCursor();
+}
+
+void MainWindow::onGamepadConnectionChanged()
+{
+    if (!m_gamepad)
+        return;
+    switch (m_gamepad->padKind()) {
+        case GamepadController::PadKind::PlayStation:
+            bpGlyphStyle() = BPGlyphStyle::PlayStation;
+            break;
+        case GamepadController::PadKind::Nintendo:
+            bpGlyphStyle() = BPGlyphStyle::Nintendo;
+            break;
+        default:
+            bpGlyphStyle() = BPGlyphStyle::Xbox;
+            break;
+    }
+    updateBPHud();
 }
 
 void MainWindow::updateBPHud()
@@ -783,6 +834,7 @@ void MainWindow::bpJumpToGroup(const QString& groupName)
 
 void MainWindow::bpPrevGroup()
 {
+    if (m_bpKeyboard && m_bpKeyboard->isVisible()) { m_bpKeyboard->cursorLeft(); return; }
     if (routeGamepadToDialog(Qt::Key_PageUp)) return;
     if (m_bpResourceBrowser && m_bpResourceBrowser->isVisible()) {
         m_bpResourceBrowser->pageUp();
@@ -803,6 +855,7 @@ void MainWindow::bpPrevGroup()
 
 void MainWindow::bpNextGroup()
 {
+    if (m_bpKeyboard && m_bpKeyboard->isVisible()) { m_bpKeyboard->cursorRight(); return; }
     if (routeGamepadToDialog(Qt::Key_PageDown)) return;
     if (m_bpResourceBrowser && m_bpResourceBrowser->isVisible()) {
         m_bpResourceBrowser->pageDown();
@@ -823,6 +876,7 @@ void MainWindow::bpNextGroup()
 
 void MainWindow::bpShowOptionsMenu()
 {
+    if (m_bpKeyboard && m_bpKeyboard->isVisible()) { m_bpKeyboard->backspace(); return; }
     if (routeGamepadToDialog(Qt::Key_Tab)) return;  // X — focus next field in dialogs
     if (m_bpResourceBrowser && m_bpResourceBrowser->isVisible()) {
         m_bpResourceBrowser->focusSearch();
@@ -878,13 +932,13 @@ bool MainWindow::routeGamepadToDialog(Qt::Key key)
     if (target != fw)
         target->setFocus(Qt::OtherFocusReason);
 
-    QCoreApplication::postEvent(target, new QKeyEvent(QEvent::KeyPress, key, Qt::NoModifier));
-    QCoreApplication::postEvent(target, new QKeyEvent(QEvent::KeyRelease, key, Qt::NoModifier));
+    bpPostKey(target, key);
     return true;
 }
 
 void MainWindow::onGamepadNavLeft()
 {
+    if (m_bpKeyboard && m_bpKeyboard->isVisible()) { m_bpKeyboard->navLeft(); return; }
     if (routeGamepadToDialog(Qt::Key_Left)) return;
     if (m_bpResourceBrowser && m_bpResourceBrowser->isVisible()) return;
     if (m_bpOptionsPanel && m_bpOptionsPanel->isVisible()) return;
@@ -892,12 +946,12 @@ void MainWindow::onGamepadNavLeft()
         m_bpSettingsOverlay->navLeft();
         return;
     }
-    QCoreApplication::postEvent(view, new QKeyEvent(QEvent::KeyPress,   Qt::Key_Left, Qt::NoModifier));
-    QCoreApplication::postEvent(view, new QKeyEvent(QEvent::KeyRelease, Qt::Key_Left, Qt::NoModifier));
+    bpPostKey(view, Qt::Key_Left);
 }
 
 void MainWindow::onGamepadNavRight()
 {
+    if (m_bpKeyboard && m_bpKeyboard->isVisible()) { m_bpKeyboard->navRight(); return; }
     if (routeGamepadToDialog(Qt::Key_Right)) return;
     if (m_bpResourceBrowser && m_bpResourceBrowser->isVisible()) return;
     if (m_bpOptionsPanel && m_bpOptionsPanel->isVisible()) return;
@@ -905,12 +959,12 @@ void MainWindow::onGamepadNavRight()
         m_bpSettingsOverlay->navRight();
         return;
     }
-    QCoreApplication::postEvent(view, new QKeyEvent(QEvent::KeyPress,   Qt::Key_Right, Qt::NoModifier));
-    QCoreApplication::postEvent(view, new QKeyEvent(QEvent::KeyRelease, Qt::Key_Right, Qt::NoModifier));
+    bpPostKey(view, Qt::Key_Right);
 }
 
 void MainWindow::onGamepadNavUp()
 {
+    if (m_bpKeyboard && m_bpKeyboard->isVisible()) { m_bpKeyboard->navUp(); return; }
     if (routeGamepadToDialog(Qt::Key_Up)) return;
     if (m_bpResourceBrowser && m_bpResourceBrowser->isVisible()) {
         m_bpResourceBrowser->navUp();
@@ -924,12 +978,12 @@ void MainWindow::onGamepadNavUp()
         m_bpSettingsOverlay->navUp();
         return;
     }
-    QCoreApplication::postEvent(view, new QKeyEvent(QEvent::KeyPress,   Qt::Key_Up, Qt::NoModifier));
-    QCoreApplication::postEvent(view, new QKeyEvent(QEvent::KeyRelease, Qt::Key_Up, Qt::NoModifier));
+    bpPostKey(view, Qt::Key_Up);
 }
 
 void MainWindow::onGamepadNavDown()
 {
+    if (m_bpKeyboard && m_bpKeyboard->isVisible()) { m_bpKeyboard->navDown(); return; }
     if (routeGamepadToDialog(Qt::Key_Down)) return;
     if (m_bpResourceBrowser && m_bpResourceBrowser->isVisible()) {
         m_bpResourceBrowser->navDown();
@@ -943,12 +997,14 @@ void MainWindow::onGamepadNavDown()
         m_bpSettingsOverlay->navDown();
         return;
     }
-    QCoreApplication::postEvent(view, new QKeyEvent(QEvent::KeyPress,   Qt::Key_Down, Qt::NoModifier));
-    QCoreApplication::postEvent(view, new QKeyEvent(QEvent::KeyRelease, Qt::Key_Down, Qt::NoModifier));
+    bpPostKey(view, Qt::Key_Down);
 }
 
 void MainWindow::onGamepadConfirm()
 {
+    if (m_gamepad)
+        m_gamepad->rumble(0x2800, 0x2800, 35);  // light tick on every confirm
+    if (m_bpKeyboard && m_bpKeyboard->isVisible()) { m_bpKeyboard->pressKey(); return; }
     if (routeGamepadToDialog(Qt::Key_Return)) return;
     if (m_bpResourceBrowser && m_bpResourceBrowser->isVisible()) {
         m_bpResourceBrowser->doConfirm();
@@ -971,11 +1027,16 @@ void MainWindow::onGamepadConfirm()
         }
         return;
     }
+    if (m_gamepad)
+        m_gamepad->rumble(0x8000, 0x8000, 120);  // strong pulse: the game is launching
     on_actionLaunchInstance_triggered();
 }
 
 void MainWindow::onGamepadCancel()
 {
+    if (m_gamepad)
+        m_gamepad->rumble(0x1400, 0x1400, 25);
+    if (m_bpKeyboard && m_bpKeyboard->isVisible()) { m_bpKeyboard->cancel(); return; }
     if (routeGamepadToDialog(Qt::Key_Escape)) return;
     if (m_bpResourceBrowser && m_bpResourceBrowser->isVisible()) {
         m_bpResourceBrowser->doCancel();
@@ -1002,6 +1063,7 @@ void MainWindow::onGamepadCancel()
 
 void MainWindow::onGamepadInfo()
 {
+    if (m_bpKeyboard && m_bpKeyboard->isVisible()) { m_bpKeyboard->space(); return; }
     if (routeGamepadToDialog(Qt::Key_Backtab)) return;  // Y — focus previous field in dialogs
     if (m_bpResourceBrowser && m_bpResourceBrowser->isVisible()) {
         m_bpResourceBrowser->toggleProvider();
@@ -1021,6 +1083,7 @@ void MainWindow::onGamepadInfo()
 
 void MainWindow::onGamepadStart()
 {
+    if (m_bpKeyboard && m_bpKeyboard->isVisible()) { m_bpKeyboard->commit(); return; }
     if (routeGamepadToDialog(Qt::Key_Space)) return;  // Start — toggle/click in dialogs
     if (m_bpResourceBrowser && m_bpResourceBrowser->isVisible()) return;
     if (m_bpOptionsPanel && m_bpOptionsPanel->isVisible()) return;
@@ -1029,6 +1092,59 @@ void MainWindow::onGamepadStart()
             m_bpSettingsOverlay->triggerToggleAction();
         return;
     }
+}
+
+void MainWindow::onGamepadTriggerLeft()
+{
+    if (m_bpKeyboard && m_bpKeyboard->isVisible()) return;
+    if (routeGamepadToDialog(Qt::Key_PageUp)) return;
+    if (m_bpResourceBrowser && m_bpResourceBrowser->isVisible()) {
+        m_bpResourceBrowser->pageUp();
+        return;
+    }
+    if (m_bpOptionsPanel && m_bpOptionsPanel->isVisible()) return;
+    if (m_bpSettingsOverlay && m_bpSettingsOverlay->isVisible()) {
+        if (m_bpSettingsOverlay->mode() == BPSettingsOverlay::Mode::Content)
+            m_bpSettingsOverlay->pageScroll(true);
+        return;
+    }
+    bpPostKey(view, Qt::Key_PageUp);
+}
+
+void MainWindow::onGamepadTriggerRight()
+{
+    if (m_bpKeyboard && m_bpKeyboard->isVisible()) return;
+    if (routeGamepadToDialog(Qt::Key_PageDown)) return;
+    if (m_bpResourceBrowser && m_bpResourceBrowser->isVisible()) {
+        m_bpResourceBrowser->pageDown();
+        return;
+    }
+    if (m_bpOptionsPanel && m_bpOptionsPanel->isVisible()) return;
+    if (m_bpSettingsOverlay && m_bpSettingsOverlay->isVisible()) {
+        if (m_bpSettingsOverlay->mode() == BPSettingsOverlay::Mode::Content)
+            m_bpSettingsOverlay->pageScroll(false);
+        return;
+    }
+    bpPostKey(view, Qt::Key_PageDown);
+}
+
+// Guide/Home is the "take me home" button: unwind whatever is open, one layer at
+// a time isn't console-like — close everything back to the instance grid.
+void MainWindow::onGamepadGuide()
+{
+    if (m_bpKeyboard && m_bpKeyboard->isVisible())
+        m_bpKeyboard->cancel();
+    if (QApplication::activeModalWidget() || (m_bpDialogHost && m_bpDialogHost->isVisible())) {
+        routeGamepadToDialog(Qt::Key_Escape);
+        return;  // dialogs may guard unsaved work — close only the dialog layer
+    }
+    if (m_bpResourceBrowser && m_bpResourceBrowser->isVisible())
+        m_bpResourceBrowser->closeBrowser();
+    if (m_bpOptionsPanel && m_bpOptionsPanel->isVisible())
+        m_bpOptionsPanel->dismiss();
+    if (m_bpSettingsOverlay && m_bpSettingsOverlay->isVisible())
+        m_bpSettingsOverlay->closeOverlay();
+    view->setFocus();
 }
 
 void MainWindow::updateLaunchButton()
@@ -1211,6 +1327,14 @@ void MainWindow::defaultAccountChanged()
 
 bool MainWindow::eventFilter(QObject* obj, QEvent* ev)
 {
+    // Touching the mouse brings the cursor back (it hides while the pad drives).
+    // MouseMove alone isn't enough — most widgets don't enable mouse tracking,
+    // so also catch hover and click events.
+    if (m_bpCursorHidden &&
+        (ev->type() == QEvent::MouseMove || ev->type() == QEvent::HoverMove ||
+         ev->type() == QEvent::MouseButtonPress || ev->type() == QEvent::Wheel))
+        bpSetCursorHidden(false);
+
     // Big Picture: reparent any QDialog being shown into the in-window host so no
     // separate windows ever appear. Native dialogs (file pickers) never emit a
     // widget Show event, so they are naturally excluded.
@@ -2082,6 +2206,10 @@ void MainWindow::resizeEvent(QResizeEvent* event)
         m_bpDialogHost->setGeometry(0, 0, width(), height());
     if (m_bpResourceBrowser && m_bpResourceBrowser->isVisible())
         m_bpResourceBrowser->setGeometry(0, 0, width(), height());
+    if (m_bpKeyboard && m_bpKeyboard->isVisible()) {
+        m_bpKeyboard->reposition();
+        m_bpKeyboard->raise();
+    }
 }
 
 void MainWindow::instanceActivated(QModelIndex index)

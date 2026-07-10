@@ -17,6 +17,7 @@
 class QDialog;
 class QLabel;
 class QTimer;
+class FocusRingWidget;
 
 // Hosts QDialogs *inside* MainWindow while Big Picture mode is active, so
 // management windows (resource downloader, loader version select, progress
@@ -66,7 +67,7 @@ private:
     QRect m_cardRect;
 
     // Controller focus indicator (see ui/BPFocusRing.h)
-    QWidget* m_focusRing = nullptr;
+    FocusRingWidget* m_focusRing = nullptr;
     QTimer* m_ringTimer = nullptr;
 
     static constexpr int TITLE_H = 52;

@@ -77,6 +77,8 @@ private:
     enum class Provider { Modrinth, CurseForge };
 
     void setupModel();  // (re)creates m_model for the current provider
+    void onKeyboardCommitted();  // on-screen keyboard Done → run the search
+    void onKeyboardClosed();     // keyboard closed → focus back on the results
     void updateTitle();
     void relayout();
     void applyTheme();
@@ -94,9 +96,20 @@ private:
 
     BaseInstance* m_instance = nullptr;
     ModFolderModel* m_mods = nullptr;  // owned by the instance, outlives the browser session
-    ResourceDownload::ModModel* m_model = nullptr;
+    ResourceDownload::ModModel* m_model = nullptr;  // points at one of the cached models below
     Provider m_provider = Provider::Modrinth;
     bool m_curseForgeAvailable = false;  // API key present and loaders supported
+
+    // Models are kept per provider for the current instance so reopening the
+    // browser or toggling the provider shows previous results/icons instantly
+    // instead of re-running the search. Dropped when the instance changes; the
+    // id double-check guards against a new instance reusing the old address.
+    ResourceDownload::ModModel* m_modrinthModel = nullptr;
+    ResourceDownload::ModModel* m_flameModel = nullptr;
+    BaseInstance* m_modelInstance = nullptr;
+    QString m_modelInstanceId;
+
+    QString m_lastHudKey;  // skip QLabel rich-text relayout when the hint didn't change
 
     int m_pendingVersionRow = -1;
     ModPlatform::IndexedPack::Ptr m_cardPack;

@@ -74,6 +74,11 @@ ListViewDelegate::ListViewDelegate(QObject* parent) : QStyledItemDelegate(parent
 void ListViewDelegate::setBigPictureMode(bool enabled)
 {
     m_bigPicture = enabled;
+    if (!enabled) {
+        m_bpNameCache.clear();
+        m_bpCardClip.clear();
+        m_bpCardClipSize = QSize();
+    }
 }
 
 void drawSelectionRect(QPainter* painter, const QStyleOptionViewItem& option, const QRect& rect)
@@ -194,18 +199,23 @@ void ListViewDelegate::paintBigPicture(QPainter* painter, const QStyleOptionView
     bool focused  = opt.state & QStyle::State_HasFocus;
 
     // ── Card background gradient (Steam Deck / console dark style) ──
-    static const QColor bgDark(18, 26, 36);    // near-black blue
-    static const QColor bgMid(28, 42, 58);     // dark slate
-    static const QColor bgSel(38, 62, 92);     // selected — noticeably lighter
-
-    QLinearGradient cardGrad(cardRect.topLeft(), cardRect.bottomLeft());
-    if (selected) {
-        cardGrad.setColorAt(0.0, bgSel.lighter(115));
-        cardGrad.setColorAt(1.0, bgSel);
-    } else {
-        cardGrad.setColorAt(0.0, bgDark);
-        cardGrad.setColorAt(1.0, bgMid);
-    }
+    // ObjectMode maps gradient coordinates onto whatever is being painted, so
+    // one gradient per state serves every card instead of one per card per frame.
+    static const QLinearGradient normalGrad = [] {
+        QLinearGradient g(0.0, 0.0, 0.0, 1.0);
+        g.setCoordinateMode(QGradient::ObjectMode);
+        g.setColorAt(0.0, QColor(18, 26, 36));  // near-black blue
+        g.setColorAt(1.0, QColor(28, 42, 58));  // dark slate
+        return g;
+    }();
+    static const QLinearGradient selectedGrad = [] {
+        const QColor bgSel(38, 62, 92);  // selected — noticeably lighter
+        QLinearGradient g(0.0, 0.0, 0.0, 1.0);
+        g.setCoordinateMode(QGradient::ObjectMode);
+        g.setColorAt(0.0, bgSel.lighter(115));
+        g.setColorAt(1.0, bgSel);
+        return g;
+    }();
 
     // ── Border ──
     QPen borderPen(Qt::NoPen);
@@ -215,7 +225,7 @@ void ListViewDelegate::paintBigPicture(QPainter* painter, const QStyleOptionView
         borderPen = QPen(QColor(160, 160, 160), 2);                // dim white for current item
 
     painter->setPen(borderPen);
-    painter->setBrush(QBrush(cardGrad));
+    painter->setBrush(selected ? selectedGrad : normalGrad);
     painter->drawRoundedRect(QRectF(cardRect).adjusted(0.5, 0.5, -0.5, -0.5), BP_CARD_RADIUS, BP_CARD_RADIUS);
 
     // ── Icon ──
@@ -227,19 +237,22 @@ void ListViewDelegate::paintBigPicture(QPainter* painter, const QStyleOptionView
     opt.icon.paint(painter, iconRect, Qt::AlignCenter, mode, iconState);
 
     // ── Text bar — semi-transparent strip at bottom ──
+    // Clipping to the card's rounded path is enough to round the bar's bottom
+    // corners (the fill rect already bounds the strip). All cards are the same
+    // size, so the path is built once at the origin and the painter translated.
     QRect textBarRect = cardRect;
     textBarRect.setTop(cardRect.bottom() - textBarHeight);
 
-    QPainterPath barPath;
-    barPath.addRoundedRect(QRectF(textBarRect), 0, 0);
-    // clip bottom corners to card radius
-    QPainterPath cardPath;
-    cardPath.addRoundedRect(QRectF(cardRect), BP_CARD_RADIUS, BP_CARD_RADIUS);
-    painter->setClipPath(cardPath & barPath);
-
-    painter->fillRect(textBarRect, QColor(0, 0, 0, 160));
-
-    painter->setClipRect(opt.rect);
+    if (m_bpCardClipSize != cardRect.size()) {
+        m_bpCardClip.clear();
+        m_bpCardClip.addRoundedRect(QRectF(QPointF(0, 0), QSizeF(cardRect.size())), BP_CARD_RADIUS, BP_CARD_RADIUS);
+        m_bpCardClipSize = cardRect.size();
+    }
+    painter->save();
+    painter->translate(cardRect.topLeft());
+    painter->setClipPath(m_bpCardClip, Qt::IntersectClip);
+    painter->fillRect(QRect(QPoint(0, textBarRect.top() - cardRect.top()), textBarRect.size()), QColor(0, 0, 0, 160));
+    painter->restore();
 
     // ── Text ──
     QFont labelFont = opt.font;
@@ -248,23 +261,26 @@ void ListViewDelegate::paintBigPicture(QPainter* painter, const QStyleOptionView
     painter->setFont(labelFont);
     painter->setPen(selected ? Qt::white : QColor(200, 210, 220));
 
+    // Laying out wrapped text is the expensive part of this paint; QStaticText
+    // caches the layout per name (bold variant separately — it wraps differently).
     QRect textRect = textBarRect.adjusted(8, 4, -8, -4);
-    QTextOption textOption;
-    textOption.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
-    textOption.setAlignment(Qt::AlignHCenter | Qt::AlignVCenter);
-    QTextLayout textLayout;
-    textLayout.setTextOption(textOption);
-    textLayout.setFont(labelFont);
-    textLayout.setText(opt.text);
-
-    qreal layoutWidth, layoutHeight;
-    viewItemTextLayout(textLayout, textRect.width(), layoutHeight, layoutWidth);
-
-    const QRect layoutRect =
-        QStyle::alignedRect(opt.direction, Qt::AlignHCenter | Qt::AlignVCenter, QSize(textRect.width(), int(layoutHeight)), textRect);
-    const QPointF pos = layoutRect.topLeft();
-    for (int i = 0; i < textLayout.lineCount(); ++i)
-        textLayout.lineAt(i).draw(painter, pos);
+    const QString cacheKey = opt.text + QLatin1String(selected ? "#s" : "#n");
+    if (m_bpNameCache.size() > 256)
+        m_bpNameCache.clear();  // renamed/removed instances would slowly pile up
+    QStaticText& staticText = m_bpNameCache[cacheKey];
+    if (staticText.text() != opt.text || staticText.textWidth() != textRect.width()) {
+        staticText.setTextFormat(Qt::PlainText);
+        QTextOption textOption;
+        textOption.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
+        textOption.setAlignment(Qt::AlignHCenter);
+        staticText.setTextOption(textOption);
+        staticText.setTextWidth(textRect.width());
+        staticText.setText(opt.text);
+        staticText.prepare(QTransform(), labelFont);
+    }
+    const QSizeF textSize = staticText.size();
+    const QPointF textPos(textRect.x(), textRect.y() + (textRect.height() - textSize.height()) / 2.0);
+    painter->drawStaticText(textPos, staticText);
 
     // ── Badges and progress ──
     auto* instance = (BaseInstance*)index.data(InstanceList::InstancePointerRole).value<void*>();

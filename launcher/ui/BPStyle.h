@@ -10,7 +10,29 @@
 
 #pragma once
 
+#include <QCoreApplication>
+#include <QKeyEvent>
+#include <QPalette>
 #include <QString>
+#include <QWidget>
+
+// Posts a synthetic key press/release pair — how the Big Picture layers translate
+// gamepad buttons into widget interactions. Shared by the overlay, the resource
+// browser, and MainWindow's routing slots.
+inline void bpPostKey(QWidget* target, Qt::Key key)
+{
+    QCoreApplication::postEvent(target, new QKeyEvent(QEvent::KeyPress, key, Qt::NoModifier));
+    QCoreApplication::postEvent(target, new QKeyEvent(QEvent::KeyRelease, key, Qt::NoModifier));
+}
+
+// dimText: 70% WindowText + 30% Window — readable but clearly secondary.
+inline QColor bpDimText(const QPalette& pal)
+{
+    const QColor text = pal.color(QPalette::WindowText);
+    const QColor window = pal.color(QPalette::Window);
+    return QColor((text.red() * 7 + window.red() * 3) / 10, (text.green() * 7 + window.green() * 3) / 10,
+                  (text.blue() * 7 + window.blue() * 3) / 10);
+}
 
 // Stylesheet applied to embedded page and dialog content in big-screen mode.
 // Increases font sizes, control heights, and row heights for comfortable

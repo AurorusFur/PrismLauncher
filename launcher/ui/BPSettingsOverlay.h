@@ -10,6 +10,7 @@
 
 #pragma once
 
+#include <QElapsedTimer>
 #include <QLabel>
 #include <QList>
 #include <QListWidget>
@@ -26,6 +27,7 @@ class QTabWidget;
 class QTimer;
 class BaseInstance;
 class BasePage;
+class FocusRingWidget;
 class InstancePageProvider;
 class PageContainer;
 
@@ -66,6 +68,7 @@ public:
     void showActionMenu();           // X → floating action popup with all page actions
     void confirmActionMenu();        // A while ActionMenu open
     void dismissActionMenu();        // B while ActionMenu open
+    void pageScroll(bool up);        // LT/RT → PageUp/PageDown in the focused widget
 
     // IBigPicturePrompt — controller-friendly inline confirmation dialog
     int execPrompt(const QString& title, const QString& msg, const QStringList& buttons, int defaultIndex = 0) override;
@@ -97,6 +100,7 @@ private:
     bool cycleInnerTab(int delta);       // LB/RB within a tabbed page; false if no tabs
     void enterValueEdit(QWidget* w);     // spinbox edit mode: ↑↓ adjust value
     void leaveValueEdit();
+    void onKeyboardClosed();             // on-screen keyboard closed → end edit mode
 
     // Lifecycle
     void rebuild(BaseInstance* instance);
@@ -106,6 +110,7 @@ private:
     void updateHud();
     void updateTitle();  // "Instance › Page" breadcrumb in the title bar
     void updateFocusRing();  // reposition the focus highlight over the focused widget
+    void updateRingTimer();  // fallback ring poll runs only while the ring can show
     void applyTheme();
     void relayout();
     void focusPageContent();
@@ -144,9 +149,17 @@ private:
     QScrollArea*   m_helpWidget = nullptr;
     QLabel*        m_hudLabel   = nullptr;
 
-    // Controller focus indicator (see FocusRingWidget in the .cpp)
-    QWidget* m_focusRing = nullptr;
+    // Controller focus indicator (see ui/BPFocusRing.h)
+    FocusRingWidget* m_focusRing = nullptr;
     QTimer*  m_ringTimer = nullptr;
+
+    // Burst cache for orderedContentWidgets(): one navigation event hits it two
+    // or three times (nav + focusChanged auto-skip); see the method for details.
+    mutable QList<QWidget*> m_orderCache;
+    mutable QWidget* m_orderCachePage = nullptr;
+    mutable QElapsedTimer m_orderCacheTime;
+
+    QString m_lastHudKey;  // skip QLabel rich-text relayout when the hint didn't change
 
     // Spinbox currently in value-edit mode (A to enter, A/B to leave), or null
     QPointer<QWidget> m_editWidget;

@@ -10,7 +10,9 @@
 
 #include "BPOptionsMenu.h"
 
+#include "ui/BPAnim.h"
 #include "ui/BPHud.h"
+#include "ui/BPStyle.h"
 
 #include <QApplication>
 #include <QKeyEvent>
@@ -19,6 +21,7 @@
 #include <QPushButton>
 #include <QResizeEvent>
 #include <QShowEvent>
+#include <QVariantAnimation>
 
 // Palette-derived button styles so the menu matches the rest of the Big Picture
 // UI (settings overlay, dialog host) on any theme.
@@ -44,11 +47,7 @@ static QString buttonStyleSelected()
 static QString buttonStyleNormal()
 {
     const QPalette& pal = QApplication::palette();
-    const QColor text = pal.color(QPalette::WindowText);
-    const QColor window = pal.color(QPalette::Window);
-    // dimText: 70% WindowText + 30% Window — readable but clearly secondary
-    const QColor dimText((text.red() * 7 + window.red() * 3) / 10, (text.green() * 7 + window.green() * 3) / 10,
-                         (text.blue() * 7 + window.blue() * 3) / 10);
+    const QColor dimText = bpDimText(pal);
     return QString(
                "QPushButton {"
                "  background-color: %1;"
@@ -143,6 +142,30 @@ void BPOptionsMenu::showEvent(QShowEvent* event)
         setGeometry(0, 0, parentWidget()->width(), parentWidget()->height());
     QWidget::showEvent(event);
     setFocus();
+
+    // Entrance: fade the scrim in while the card pops up. Title is a sibling of
+    // the card (see ctor), so it gets the same pop-in to move in lockstep.
+    if (auto* old = findChild<QVariantAnimation*>(QStringLiteral("bpScrimAnim"))) {
+        old->stop();
+        old->deleteLater();
+    }
+    m_scrimAlpha = 0;
+    auto* scrim = new QVariantAnimation(this);
+    scrim->setObjectName(QStringLiteral("bpScrimAnim"));
+    scrim->setStartValue(0);
+    scrim->setEndValue(170);
+    scrim->setDuration(150);
+    connect(scrim, &QVariantAnimation::valueChanged, this, [this](const QVariant& v) {
+        m_scrimAlpha = v.toInt();
+        update();
+    });
+    connect(scrim, &QVariantAnimation::finished, scrim, &QObject::deleteLater);
+    scrim->start();
+
+    if (m_card)
+        bpPopIn(m_card);
+    if (m_title)
+        bpPopIn(m_title);
 }
 
 void BPOptionsMenu::layoutCard()
@@ -191,7 +214,7 @@ void BPOptionsMenu::paintEvent(QPaintEvent*)
     QPainter p(this);
     // Translucent scrim — keep the instance grid visible, dimmed, behind the card.
     // Same scrim as the settings overlay's modal cards and the dialog host.
-    p.fillRect(rect(), QColor(0, 0, 0, 170));
+    p.fillRect(rect(), QColor(0, 0, 0, m_scrimAlpha));
 }
 
 void BPOptionsMenu::keyPressEvent(QKeyEvent* event)
