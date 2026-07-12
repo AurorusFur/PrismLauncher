@@ -113,6 +113,7 @@ struct Server {
 
     // Data - temporary
     std::optional<int> m_currentPlayers;  // nullopt if not calculated/calculating
+    bool m_pingFailed = false;            // query finished but the server was unreachable
 };
 
 static std::unique_ptr<nbt::tag_compound> parseServersDat(const QString& filename)
@@ -329,6 +330,8 @@ class ServersModel : public QAbstractListModel {
                     case 2:
                         if (m_servers[row].m_currentPlayers) {
                             return *m_servers[row].m_currentPlayers;
+                        } else if (m_servers[row].m_pingFailed) {
+                            return "—";
                         } else {
                             return "...";
                         }
@@ -438,6 +441,7 @@ class ServersModel : public QAbstractListModel {
         for (Server& server : m_servers) {
             // reset current players
             server.m_currentPlayers = {};
+            server.m_pingFailed = false;
             emit dataChanged(index(row, 0), index(row, COLUMN_COUNT - 1));
 
             // Start task to query server status
@@ -445,11 +449,15 @@ class ServersModel : public QAbstractListModel {
             auto* task = new ServerPingTask(target.address, target.port);
             m_currentQueryTask->addTask(Task::Ptr(task));
 
-            // Update the model when the task is done
+            // Update the model when the task is done. A failed ping must not leak
+            // the -1 sentinel into the column — show "unreachable" instead.
             connect(task, &Task::finished, this, [this, task, row]() {
-                if (m_servers.size() < row)
+                if (row >= m_servers.size())
                     return;
-                m_servers[row].m_currentPlayers = task->m_outputOnlinePlayers;
+                if (task->wasSuccessful())
+                    m_servers[row].m_currentPlayers = task->m_outputOnlinePlayers;
+                else
+                    m_servers[row].m_pingFailed = true;
                 emit dataChanged(index(row, 0), index(row, COLUMN_COUNT - 1));
             });
             row++;

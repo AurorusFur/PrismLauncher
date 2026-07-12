@@ -281,6 +281,7 @@ class MainWindow : public QMainWindow {
     KonamiCode* secretEventFilter = nullptr;
     ListViewDelegate* m_listDelegate = nullptr;
     GamepadController* m_gamepad = nullptr;
+    QObject* m_bpKeyShortcuts = nullptr;  // PRISM_BP_KEYS=1 keyboard stand-in for the pad (testing)
 
     // Big Picture state
     QLabel* m_bpHudLabel = nullptr;

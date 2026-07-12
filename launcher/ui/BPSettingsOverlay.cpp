@@ -115,7 +115,17 @@ BPSettingsOverlay::BPSettingsOverlay(QWidget* parent) : QWidget(parent)
     // a fixed focus widget, model resets, async page updates).
     m_ringTimer = new QTimer(this);
     m_ringTimer->setInterval(200);
-    connect(m_ringTimer, &QTimer::timeout, this, &BPSettingsOverlay::updateFocusRing);
+    connect(m_ringTimer, &QTimer::timeout, this, [this] {
+        updateFocusRing();
+        // Resource folder models fill asynchronously — the view is often focused
+        // while it still has 0 rows, so the ensure in focusPageContent() ran on
+        // an empty list. Land on the first row as soon as one exists; without a
+        // current row all row-dependent actions (remove, edit…) stay disabled.
+        auto* c = currentContainer();
+        QWidget* fw = QApplication::focusWidget();
+        if (auto* view = qobject_cast<QAbstractItemView*>(fw); view && c && c->isAncestorOf(view))
+            bpEnsureCurrentRow(view);
+    });
 
     applyTheme();
     updateHud();
@@ -388,6 +398,12 @@ void BPSettingsOverlay::navUp()
             }
             auto* w = contentFocusWidget();
             if (!w) break;
+            // A view without a current row eats arrow keys on some styles —
+            // make the first press land on a row instead.
+            if (auto* view = qobject_cast<QAbstractItemView*>(w); view && !view->currentIndex().isValid()) {
+                bpEnsureCurrentRow(view);
+                break;
+            }
             if (w != m_editWidget && isFormWidget(w))
                 focusNextInContent(false);
             else
@@ -410,10 +426,23 @@ void BPSettingsOverlay::navDown()
             }
             auto* w = contentFocusWidget();
             if (!w) break;
-            if (w != m_editWidget && isFormWidget(w))
+            if (auto* view = qobject_cast<QAbstractItemView*>(w); view && !view->currentIndex().isValid()) {
+                bpEnsureCurrentRow(view);  // see navUp
+                break;
+            }
+            if (w != m_editWidget && isFormWidget(w)) {
                 focusNextInContent(true);
-            else
-                bpPostKey(w, Qt::Key_Down);
+                break;
+            }
+            // Servers page: the edit fields sit below the list, so ↓ on the last
+            // row continues into them instead of dead-ending in the list.
+            if (auto* view = qobject_cast<QAbstractItemView*>(w);
+                view && currentPageCategory() == PageCategory::Servers && view->currentIndex().isValid() &&
+                view->currentIndex().row() == view->model()->rowCount(view->rootIndex()) - 1) {
+                focusNextInContent(true);
+                break;
+            }
+            bpPostKey(w, Qt::Key_Down);
             break;
         }
         case Mode::ActionMenu: bpPostKey(m_actionList, Qt::Key_Down); break;
@@ -585,6 +614,8 @@ void BPSettingsOverlay::triggerPrimaryAction()
 
 void BPSettingsOverlay::triggerToggleAction()
 {
+    if (auto* view = qobject_cast<QAbstractItemView*>(QApplication::focusWidget()))
+        bpEnsureCurrentRow(view);
     switch (currentPageCategory()) {
         case PageCategory::ExternalResource:
             sendKeyToFocused(Qt::Key_Space);
@@ -712,6 +743,10 @@ void BPSettingsOverlay::positionActionPopup()
 void BPSettingsOverlay::showActionMenu()
 {
     if (m_helpShowing) return;
+    // Make sure a row is selected before reading the actions' enabled state —
+    // row-dependent ones (remove, edit…) are disabled without a selection.
+    if (auto* view = qobject_cast<QAbstractItemView*>(QApplication::focusWidget()))
+        bpEnsureCurrentRow(view);
     m_currentActions = gatherPageActions();
     if (m_currentActions.isEmpty()) return;
 
@@ -1455,7 +1490,7 @@ void BPSettingsOverlay::updateHud()
                 hint = tr("[↑↓] Navigate    [A] Open    [X] Actions    [Y] Add    [LB/RB] Page    [B] Back");
                 break;
             case PageCategory::Servers:
-                hint = tr("[↑↓] Navigate    [Start] Join    [X] Actions    [Y] Add    [LB/RB] Page    [B] Back");
+                hint = tr("[↑↓] Navigate    [←→] Edit Fields    [Start] Join    [X] Actions    [Y] Add    [B] Back");
                 break;
             case PageCategory::Screenshots:
                 hint = tr("[↑↓] Navigate    [A] Open    [X] Actions    [Y] Copy    [LB/RB] Page    [B] Back");

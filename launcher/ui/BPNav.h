@@ -66,11 +66,22 @@ inline QList<QWidget*> bpOrderedControllerWidgets(QWidget* root, QWidget* scope)
 }
 
 // Item views only enable their actions (remove, edit…) once a row is actually
-// current — make sure focusing one lands on a row, even a lone one.
+// current *and selected* — make sure focusing one lands on a row, even a lone one.
 inline void bpEnsureCurrentRow(QAbstractItemView* view)
 {
-    if (!view || !view->model())
+    if (!view || !view->model() || !view->selectionModel())
         return;
-    if (!view->currentIndex().isValid() && view->model()->rowCount(view->rootIndex()) > 0)
-        view->setCurrentIndex(view->model()->index(0, 0, view->rootIndex()));
+    const QModelIndex cur = view->currentIndex();
+    if (!cur.isValid()) {
+        if (view->model()->rowCount(view->rootIndex()) > 0)
+            view->setCurrentIndex(view->model()->index(0, 0, view->rootIndex()));
+        return;
+    }
+    // QAbstractItemView::focusInEvent gives a freshly focused view a current
+    // index with SelectionFlag::NoUpdate — current but not selected. Arrow keys
+    // normally fix that on the first cursor move, but a single-row list has
+    // nowhere to move, so the row would stay unselected (faint focus tint, no
+    // highlight, row-actions disabled) forever. Promote it to a real selection.
+    if (view->selectionMode() != QAbstractItemView::NoSelection && !view->selectionModel()->hasSelection())
+        view->setCurrentIndex(cur);
 }

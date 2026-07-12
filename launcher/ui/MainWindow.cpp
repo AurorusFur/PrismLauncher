@@ -736,6 +736,36 @@ void MainWindow::applyBigPictureMode()
         m_gamepad = nullptr;
     }
 
+    // Keyboard stand-in for the pad, for testing BP mode without hardware.
+    // Gated behind PRISM_BP_KEYS=1 so it never interferes with normal use.
+    // Chords avoid every key widgets consume (arrows, Enter, letters).
+    if (bigPicture && !m_bpKeyShortcuts && qEnvironmentVariableIsSet("PRISM_BP_KEYS")) {
+        m_bpKeyShortcuts = new QObject(this);
+        auto bind = [this](const QKeySequence& seq, void (MainWindow::*slot)()) {
+            auto* sc = new QShortcut(seq, m_bpKeyShortcuts);
+            sc->setContext(Qt::ApplicationShortcut);
+            // Queued for the same reason as the pad connects above.
+            connect(sc, &QShortcut::activated, this, slot, Qt::QueuedConnection);
+        };
+        bind(QKeySequence("Ctrl+Alt+Left"),     &MainWindow::onGamepadNavLeft);
+        bind(QKeySequence("Ctrl+Alt+Right"),    &MainWindow::onGamepadNavRight);
+        bind(QKeySequence("Ctrl+Alt+Up"),       &MainWindow::onGamepadNavUp);
+        bind(QKeySequence("Ctrl+Alt+Down"),     &MainWindow::onGamepadNavDown);
+        bind(QKeySequence("Ctrl+Alt+Return"),   &MainWindow::onGamepadConfirm);      // A
+        bind(QKeySequence("Ctrl+Alt+Backspace"),&MainWindow::onGamepadCancel);       // B
+        bind(QKeySequence("Ctrl+Alt+X"),        &MainWindow::bpShowOptionsMenu);     // X
+        bind(QKeySequence("Ctrl+Alt+Y"),        &MainWindow::onGamepadInfo);         // Y
+        bind(QKeySequence("Ctrl+Alt+["),        &MainWindow::bpPrevGroup);           // LB
+        bind(QKeySequence("Ctrl+Alt+]"),        &MainWindow::bpNextGroup);           // RB
+        bind(QKeySequence("Ctrl+Alt+S"),        &MainWindow::onGamepadStart);        // Start
+        bind(QKeySequence("Ctrl+Alt+PgUp"),     &MainWindow::onGamepadTriggerLeft);  // LT
+        bind(QKeySequence("Ctrl+Alt+PgDown"),   &MainWindow::onGamepadTriggerRight); // RT
+        bind(QKeySequence("Ctrl+Alt+G"),        &MainWindow::onGamepadGuide);        // Guide
+    } else if (!bigPicture && m_bpKeyShortcuts) {
+        delete m_bpKeyShortcuts;
+        m_bpKeyShortcuts = nullptr;
+    }
+
     // Options overlay panel (X button action menu): create once, reuse
     if (bigPicture && !m_bpOptionsPanel) {
         m_bpOptionsPanel = new BPOptionsMenu(this);

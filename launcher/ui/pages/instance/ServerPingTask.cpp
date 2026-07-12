@@ -6,15 +6,6 @@
 #include "McResolver.h"
 #include "ServerPingTask.h"
 
-unsigned getOnlinePlayers(QJsonObject data)
-{
-    try {
-        return Json::requireInteger(Json::requireObject(data, "players"), "online");
-    } catch (Exception& e) {
-        qWarning() << "server ping failed to parse response" << e.what();
-        return 0;
-    }
-}
 
 void ServerPingTask::executeTask()
 {
@@ -29,9 +20,16 @@ void ServerPingTask::executeTask()
         McClient* client = new McClient(nullptr, m_domain, ip, port);
 
         connect(client, &McClient::succeeded, this, [this](QJsonObject data) {
-            m_outputOnlinePlayers = getOnlinePlayers(data);
-            qDebug() << "Online players:" << m_outputOnlinePlayers;
-            emitSucceeded();
+            // A response without players.online is not "0 players" — fail so the
+            // page can show the server as unreachable instead.
+            try {
+                m_outputOnlinePlayers = Json::requireInteger(Json::requireObject(data, "players"), "online");
+                qDebug() << "Online players:" << m_outputOnlinePlayers;
+                emitSucceeded();
+            } catch (Exception& e) {
+                qWarning() << "server ping failed to parse response" << e.what();
+                emitFailed(e.what());
+            }
         });
         connect(client, &McClient::failed, this, [this](QString error) { emitFailed(error); });
 
