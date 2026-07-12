@@ -289,6 +289,7 @@ class MainWindow : public QMainWindow {
     static constexpr int BP_HEADER_H = 52;
     BPOptionsMenu* m_bpOptionsPanel = nullptr;      // instance action menu overlay
     BPSettingsOverlay* m_bpSettingsOverlay = nullptr;  // inline settings panel
+    QTimer* m_bpPrewarmTimer = nullptr;                // debounced overlay pre-build after selection settles
     BPDialogHost* m_bpDialogHost = nullptr;         // hosts QDialogs in-window (no extra windows)
     BPResourceBrowser* m_bpResourceBrowser = nullptr;  // controller-native mod download manager
     BPVirtualKeyboard* m_bpKeyboard = nullptr;      // on-screen keyboard for text fields

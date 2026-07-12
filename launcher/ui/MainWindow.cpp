@@ -93,6 +93,8 @@
 #include "InstanceWindow.h"
 
 #include <QLineEdit>
+#include <QPlainTextEdit>
+#include <QTextEdit>
 #include <QTimer>
 
 #include "ui/BPHud.h"
@@ -778,10 +780,28 @@ void MainWindow::applyBigPictureMode()
     // Inline settings overlay (Y button): create once, reuse
     if (bigPicture && !m_bpSettingsOverlay) {
         m_bpSettingsOverlay = new BPSettingsOverlay(this);
+        // Building the settings pages takes a couple of seconds the first time.
+        // Warm the currently-selected instance once, shortly after entering BP
+        // mode, so the first [Y] press opens instantly instead of freezing on
+        // that build. Deliberately NOT re-run on every selection change — the
+        // build is synchronous, so doing it on each grid pause would stutter
+        // browsing for users who never open settings. The rarer "open settings
+        // for a different instance" case falls back to building on open().
+        m_bpPrewarmTimer = new QTimer(this);
+        m_bpPrewarmTimer->setSingleShot(true);
+        m_bpPrewarmTimer->setInterval(500);
+        connect(m_bpPrewarmTimer, &QTimer::timeout, this, [this] {
+            if (m_bpSettingsOverlay && !m_bpSettingsOverlay->isVisible() && m_selectedInstance)
+                m_bpSettingsOverlay->prewarm(m_selectedInstance);
+        });
+        if (m_selectedInstance)
+            m_bpPrewarmTimer->start();
     } else if (!bigPicture && m_bpSettingsOverlay) {
         m_bpSettingsOverlay->closeOverlay();
         delete m_bpSettingsOverlay;
         m_bpSettingsOverlay = nullptr;
+        delete m_bpPrewarmTimer;
+        m_bpPrewarmTimer = nullptr;
     }
 
     // In-window dialog host: Big Picture must not spawn extra windows, so every
@@ -852,8 +872,8 @@ void MainWindow::onGamepadConnectionChanged()
 void MainWindow::updateBPHud()
 {
     if (!m_bpHudLabel) return;
-    m_bpHudLabel->setText(
-        bpHudHtml(tr("[↑↓←→] Navigate    [A] Launch    [X] Options    [Y] Settings    [LB/RB] Switch Group")));
+    m_bpHudLabel->setText(bpHudHtml(
+        tr("[↑↓←→] Navigate    [A] Launch    [X] Options    [Y] Settings    [Start] Add    [LB/RB] Switch Group")));
 }
 
 QStringList MainWindow::bpGroupList() const
@@ -956,9 +976,13 @@ void MainWindow::onBPOptionsAction(BPOptionsMenu::Action action)
             on_actionRenameInstance_triggered();
             // Renaming happens in the view's inline editor, which only exists
             // after the event loop spins — then give it the on-screen keyboard.
+            // The delegate's editor is a QTextEdit (NoReturnTextEdit), not a
+            // QLineEdit, so match any text-entry widget the keyboard supports.
             QTimer::singleShot(0, this, [this] {
-                auto* editor = qobject_cast<QLineEdit*>(QApplication::focusWidget());
-                if (editor && m_bpKeyboard && view->isAncestorOf(editor))
+                QWidget* editor = QApplication::focusWidget();
+                const bool isText = qobject_cast<QLineEdit*>(editor) || qobject_cast<QTextEdit*>(editor) ||
+                                    qobject_cast<QPlainTextEdit*>(editor);
+                if (isText && m_bpKeyboard && view->isAncestorOf(editor))
                     m_bpKeyboard->openFor(editor);
             });
             break;
@@ -1151,6 +1175,10 @@ void MainWindow::onGamepadStart()
             m_bpSettingsOverlay->triggerToggleAction();
         return;
     }
+    // On the instance grid, Start creates a new instance. NewInstanceDialog is a
+    // QDialog, so BPDialogHost picks it up and the pad can drive it. Works even
+    // with no instance selected (unlike the per-instance options menu).
+    on_actionAddInstance_triggered();
 }
 
 void MainWindow::onGamepadTriggerLeft()

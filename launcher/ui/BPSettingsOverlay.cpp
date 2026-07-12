@@ -185,6 +185,18 @@ void BPSettingsOverlay::open(BaseInstance* instance)
     IBigPicturePrompt::setInstance(this);
 }
 
+void BPSettingsOverlay::prewarm(BaseInstance* instance)
+{
+    if (!instance || isVisible())
+        return;
+    if (m_instance == instance && m_container)
+        return;  // already built for this instance
+    teardown();
+    rebuild(instance);
+    m_instance = instance;
+    // Built but still hidden — open() will now find m_container and skip rebuild.
+}
+
 void BPSettingsOverlay::closeOverlay()
 {
     IBigPicturePrompt::setInstance(nullptr);
@@ -978,6 +990,7 @@ QString BPSettingsOverlay::helpHtml() const
         "<tr><td><b>[A]</b></td><td>Launch selected instance</td></tr>"
         "<tr><td><b>[X]</b></td><td>Open instance options menu</td></tr>"
         "<tr><td><b>[Y]</b></td><td>Open instance settings</td></tr>"
+        "<tr><td><b>[Start]</b></td><td>Add a new instance</td></tr>"
         "<tr><td><b>[LB / RB]</b></td><td>Switch group</td></tr>"
         "<tr><td><b>[↑↓←→]</b></td><td>Navigate instances (right stick: fast scroll)</td></tr>"
         "<tr><td><b>[LT / RT]</b></td><td>Page up / down in lists</td></tr>"

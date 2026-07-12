@@ -84,7 +84,12 @@ bool ConcurrentTask::abort()
     QMutableHashIterator<Task*, Task::Ptr> doing_iter(m_doing);
     while (doing_iter.hasNext()) {
         auto task = doing_iter.next();
-        disconnect(task->get(), &Task::aborted, this, 0);
+        // Drop ALL of the child's connections to us before aborting it, not just
+        // `aborted`. Aborting a child often makes it emit `failed` (e.g. a
+        // cancelled network request), which would still reach subTaskFailed and
+        // queue an emitFailed() that fires after we've already emitAborted() —
+        // completing this task twice (asserts in debug, races in release).
+        disconnect(task->get(), nullptr, this, nullptr);
         suceedeed &= (task.value())->abort();
     }
 

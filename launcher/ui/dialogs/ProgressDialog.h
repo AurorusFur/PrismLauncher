@@ -81,6 +81,12 @@ class ProgressDialog : public QDialog {
    private slots:
     void on_skipButton_clicked(bool checked);
 
+   public slots:
+    // Escape / [B] / Cancel: abort the running task instead of hiding the dialog
+    // and letting it finish in the background (which orphaned the load and still
+    // created the instance). Stays open if the task can't be aborted right now.
+    void reject() override;
+
    protected:
     virtual void keyPressEvent(QKeyEvent* e);
     virtual void closeEvent(QCloseEvent* e);

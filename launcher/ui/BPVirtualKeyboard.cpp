@@ -224,9 +224,10 @@ void BPVirtualKeyboard::space()
 
 void BPVirtualKeyboard::commit()
 {
-    // Commit an inline rename through the delegate. Only for single-line
-    // editors — Return would insert a newline in notes-style text edits.
-    if (m_target && qobject_cast<QLineEdit*>(m_target.data()) && isItemViewEditor(m_target))
+    // Commit an inline rename through the delegate. Only for item-view editors
+    // (QLineEdit or the instance grid's NoReturnTextEdit, both of which commit on
+    // Return) — a standalone notes-style QTextEdit would just insert a newline.
+    if (m_target && isItemViewEditor(m_target))
         bpPostKey(m_target, Qt::Key_Return);
     closeKeyboard(true);
 }

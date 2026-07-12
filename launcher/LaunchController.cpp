@@ -375,7 +375,10 @@ void LaunchController::launchInstance()
 
     const auto* console = qobject_cast<InstanceWindow*>(m_parentWidget);
     const auto showConsole = m_instance->settings()->get("ShowConsole").toBool();
-    if (!console && showConsole) {
+    // Big Picture mode must not spawn separate windows — a console popping up as a
+    // stray native window (often on another monitor) is exactly what the user hit.
+    const bool bigPicture = APPLICATION->settings()->get("BigPictureMode").toBool();
+    if (!console && showConsole && !bigPicture) {
         APPLICATION->showInstanceWindow(m_instance);
     }
     connect(m_launcher, &LaunchTask::readyForLaunch, this, &LaunchController::readyForLaunch);
@@ -456,7 +459,9 @@ void LaunchController::onSucceeded()
 
 void LaunchController::onFailed(QString reason)
 {
-    if (m_instance->settings()->get("ShowConsoleOnError").toBool()) {
+    // Same as launch: never open the desktop console window in Big Picture mode
+    // (aborting the load reaches here and would otherwise pop it up as a new window).
+    if (m_instance->settings()->get("ShowConsoleOnError").toBool() && !APPLICATION->settings()->get("BigPictureMode").toBool()) {
         APPLICATION->showInstanceWindow(m_instance, "console");
     }
     emitFailed(std::move(reason));

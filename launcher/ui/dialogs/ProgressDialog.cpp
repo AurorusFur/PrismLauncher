@@ -150,7 +150,9 @@ int ProgressDialog::execWithTask(Task* task)
     this->m_taskConnections.push_back(connect(task, &Task::details, this, &ProgressDialog::changeStatus));
     this->m_taskConnections.push_back(connect(task, &Task::stepProgress, this, &ProgressDialog::changeStepProgress));
     this->m_taskConnections.push_back(connect(task, &Task::progress, this, &ProgressDialog::changeProgress));
-    this->m_taskConnections.push_back(connect(task, &Task::aborted, this, &ProgressDialog::hide));
+    // When the task actually stops after an abort, close the dialog for real so
+    // exec() returns (plain hide() would leave the modal loop spinning).
+    this->m_taskConnections.push_back(connect(task, &Task::aborted, this, [this] { done(QDialog::Rejected); }));
     this->m_taskConnections.push_back(connect(task, &Task::abortStatusChanged, ui->skipButton, &QPushButton::setEnabled));
     this->m_taskConnections.push_back(connect(task, &Task::abortButtonTextChanged, ui->skipButton, &QPushButton::setText));
 
@@ -261,19 +263,30 @@ void ProgressDialog::changeProgress(qint64 current, qint64 total)
     ui->globalProgressBar->setValue(current);
 }
 
+void ProgressDialog::reject()
+{
+    // Any cancel gesture aborts the running task rather than orphaning it. If the
+    // task can't be aborted at this instant (e.g. mid-commit), keep the dialog up
+    // instead of hiding it while the work silently continues. The task's aborted/
+    // failed signal then closes us (see execWithTask).
+    if (m_task && m_task->isRunning()) {
+        if (m_task->canAbort())
+            m_task->abort();
+        return;
+    }
+    QDialog::reject();
+}
+
 void ProgressDialog::keyPressEvent(QKeyEvent* e)
 {
-    if (ui->skipButton->isVisible()) {
-        if (e->key() == Qt::Key_Escape) {
-            on_skipButton_clicked(true);
-            return;
-        } else if (e->key() == Qt::Key_Tab) {
-            ui->skipButton->setFocusPolicy(Qt::StrongFocus);
-            ui->skipButton->setFocus();
-            ui->skipButton->setAutoDefault(true);
-            ui->skipButton->setDefault(true);
-            return;
-        }
+    // Tab moves focus onto the skip button; Escape falls through to reject()
+    // (overridden above) so it aborts instead of just hiding the dialog.
+    if (ui->skipButton->isVisible() && e->key() == Qt::Key_Tab) {
+        ui->skipButton->setFocusPolicy(Qt::StrongFocus);
+        ui->skipButton->setFocus();
+        ui->skipButton->setAutoDefault(true);
+        ui->skipButton->setDefault(true);
+        return;
     }
     QDialog::keyPressEvent(e);
 }

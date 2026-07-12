@@ -50,6 +50,12 @@ public:
     void open(BaseInstance* instance);
     void closeOverlay();
 
+    // Build the (expensive) page containers ahead of time while the overlay is
+    // hidden, so the first open() for this instance is instant instead of
+    // freezing for a couple of seconds. Safe to call repeatedly; no-op when
+    // already built for this instance or while the overlay is open.
+    void prewarm(BaseInstance* instance);
+
     Mode mode() const { return m_mode; }
 
     // Gamepad actions — called from MainWindow routing slots

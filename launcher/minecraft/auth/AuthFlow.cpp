@@ -148,6 +148,12 @@ bool AuthFlow::changeState(AccountTaskState newState, QString reason)
 }
 bool AuthFlow::abort()
 {
+    // Guard against a second abort: the login dialog wires its Cancel to both the
+    // auth-flow and device-code tasks, and aborting one can drive the other, so
+    // abort() can be re-entered. Without this, emitAborted() runs on an already
+    // finished task (asserts in debug, double-completes in release).
+    if (!isRunning())
+        return true;
     if (m_currentStep)
         m_currentStep->abort();
     emitAborted();
