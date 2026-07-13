@@ -55,6 +55,7 @@ public:
     static QWidget* preferredFocusChild(QWidget* root);
 
 protected:
+    bool eventFilter(QObject* obj, QEvent* ev) override;
     void paintEvent(QPaintEvent*) override;
     void resizeEvent(QResizeEvent*) override;
     void changeEvent(QEvent*) override;
@@ -77,6 +78,10 @@ private:
 
     // Item view the user "entered" with A — its rows get native ↑↓ until B backs out.
     QPointer<QWidget> m_enteredView;
+
+    // Re-entrancy guard: layoutDialog() itself generates the Move/Resize events
+    // the eventFilter re-layouts on.
+    bool m_relayouting = false;
 
     // Big Picture chrome around the hosted dialog
     QLabel* m_titleLabel = nullptr;

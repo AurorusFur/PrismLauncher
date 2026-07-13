@@ -92,6 +92,7 @@ void BPDialogHost::hostDialog(QDialog* dialog)
     connect(dialog, &QDialog::finished, this, &BPDialogHost::dialogClosed);
     connect(dialog, &QObject::destroyed, this, &BPDialogHost::purge);
     connect(dialog, &QWidget::windowTitleChanged, this, [this](const QString& title) { m_titleLabel->setText(title); });
+    dialog->installEventFilter(this);  // re-center the card when the dialog resizes/moves itself
 
     // Only the topmost dialog is interactive/visible.
     if (QDialog* below = activeDialog())
@@ -163,6 +164,9 @@ void BPDialogHost::layoutDialog(QDialog* dialog)
     if (s.width() < 200 || s.height() < 120)
         s = dialog->sizeHint();
     s = s.expandedTo(dialog->minimumSizeHint());
+    // Never narrower than the hint bar needs — a narrow dialog (e.g. the MSA
+    // login card) would otherwise clip the trailing gamepad hints.
+    s.setWidth(qMax(s.width(), m_hudLabel->sizeHint().width() + 32));
     s = s.boundedTo(QSize(width() * 92 / 100, height() * 92 / 100 - TITLE_H - HUD_H));
 
     const int cardW = s.width();
@@ -176,6 +180,22 @@ void BPDialogHost::layoutDialog(QDialog* dialog)
     m_hudLabel->setGeometry(cx, cy + TITLE_H + s.height(), cardW, HUD_H);
     m_titleLabel->raise();
     m_hudLabel->raise();
+    update();  // m_cardRect changed — repaint the card frame
+}
+
+bool BPDialogHost::eventFilter(QObject* obj, QEvent* ev)
+{
+    // Hosted dialogs keep their desktop habits: ProgressDialog re-centers itself
+    // on every status line and MSALoginDialog adjustSize()s per auth stage. As
+    // plain children of the host that walks them out of the painted card frame,
+    // leaving the title/hint bars behind — re-run our layout around the new size
+    // instead.
+    if (!m_relayouting && (ev->type() == QEvent::Resize || ev->type() == QEvent::Move) && isVisible() && obj == activeDialog()) {
+        m_relayouting = true;
+        layoutDialog(activeDialog());
+        m_relayouting = false;
+    }
+    return QWidget::eventFilter(obj, ev);
 }
 
 void BPDialogHost::dialogClosed()

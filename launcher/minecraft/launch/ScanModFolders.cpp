@@ -84,7 +84,16 @@ void ScanModFolders::nilModsDone()
 
 void ScanModFolders::checkDone()
 {
+    // The folder models outlive this launch step and emit updateFinished again on
+    // every later refresh (e.g. opening the Mods page while the game runs) — this
+    // must complete the task exactly once.
+    if (!isRunning())
+        return;
     if (m_modsDone && m_coreModsDone && m_nilModsDone) {
+        auto inst = m_parent->instance();
+        disconnect(inst->loaderModList(), nullptr, this, nullptr);
+        disconnect(inst->coreModList(), nullptr, this, nullptr);
+        disconnect(inst->nilModList(), nullptr, this, nullptr);
         emitSucceeded();
     }
 }

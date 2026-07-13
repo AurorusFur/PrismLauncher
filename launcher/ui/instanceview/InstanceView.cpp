@@ -998,7 +998,13 @@ void InstanceView::scrollTo(const QModelIndex& index, ScrollHint hint)
     if (!index.isValid())
         return;
 
-    const QRect rect = visualRect(index);
+    QRect rect = visualRect(index);
+    // An item in its group's first row owns the header above it: require the
+    // label to be visible too, so scrolling to a top row can't leave the
+    // category name hidden beyond the viewport edge.
+    auto cat = category(index);
+    if (cat && cat->rowTopOf(index) == 0)
+        rect.setTop(rect.top() - VisualGroup::headerHeight() - 5);  // 5 = header-to-row gap, see geometryRect()
     if (hint == EnsureVisible && viewport()->rect().contains(rect)) {
         viewport()->update(rect);
         return;
@@ -1007,7 +1013,7 @@ void InstanceView::scrollTo(const QModelIndex& index, ScrollHint hint)
     verticalScrollBar()->setValue(verticalScrollToValue(index, rect, hint));
 }
 
-int InstanceView::verticalScrollToValue([[maybe_unused]] const QModelIndex& index, const QRect& rect, QListView::ScrollHint hint) const
+int InstanceView::verticalScrollToValue(const QModelIndex& index, const QRect& rect, QListView::ScrollHint hint) const
 {
     const QRect area = viewport()->rect();
     const bool above = (hint == QListView::EnsureVisible && rect.top() < area.top());

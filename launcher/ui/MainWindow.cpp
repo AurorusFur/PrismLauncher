@@ -712,8 +712,7 @@ void MainWindow::applyBigPictureMode()
         // Queued on purpose: several slots open dialogs that exec() a nested event
         // loop. With direct connections that loop runs while GamepadController::
         // poll() is still on the stack, so its timer can't re-fire — the pad goes
-        // dead inside the dialog and a started rumble never gets its expiry
-        // processed (it buzzes until the dialog closes).
+        // dead inside the dialog.
         connect(m_gamepad, &GamepadController::navigateLeft,         this, &MainWindow::onGamepadNavLeft,     Qt::QueuedConnection);
         connect(m_gamepad, &GamepadController::navigateRight,        this, &MainWindow::onGamepadNavRight,    Qt::QueuedConnection);
         connect(m_gamepad, &GamepadController::navigateUp,           this, &MainWindow::onGamepadNavUp,       Qt::QueuedConnection);
@@ -1111,8 +1110,6 @@ void MainWindow::onGamepadConfirm()
         }
         return;
     }
-    if (m_gamepad)
-        m_gamepad->rumble(0x8000, 0x8000, 120);  // strong pulse: the game is launching
     on_actionLaunchInstance_triggered();
 }
 

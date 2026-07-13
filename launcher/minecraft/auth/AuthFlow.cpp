@@ -75,6 +75,11 @@ void AuthFlow::nextStep()
 
 void AuthFlow::stepFinished(AccountTaskState resultingState, QString message)
 {
+    // Steps can report after the task has already completed — e.g. aborting the
+    // device-code step makes it emit finished(STATE_FAILED_HARD) from inside
+    // abort() — and completing the task a second time asserts.
+    if (!isRunning())
+        return;
     if (changeState(resultingState, message))
         nextStep();
 }
@@ -154,8 +159,13 @@ bool AuthFlow::abort()
     // finished task (asserts in debug, double-completes in release).
     if (!isRunning())
         return true;
+    // Settle our own state before touching the step: aborting the device-code
+    // step makes it emit finished(STATE_FAILED_HARD) synchronously, which would
+    // otherwise complete this task as *failed* mid-abort and leave emitAborted()
+    // to fire on an already-finished task. stepFinished() ignores step results
+    // once we are no longer running.
+    emitAborted();
     if (m_currentStep)
         m_currentStep->abort();
-    emitAborted();
     return true;
 }
